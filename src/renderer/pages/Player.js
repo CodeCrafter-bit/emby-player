@@ -12,8 +12,8 @@ import Hls from 'hls.js';
 const { Title, Text, Paragraph } = Typography;
 const { TabPane } = Tabs;
 const { Panel } = Collapse;
-// 改进缓冲管理器类，增强空值检查
-class BufferManager {
+// 高级双线程缓冲管理器类
+class AdvancedBufferManager {
     constructor(player, videoElement, onBufferingChange, onBufferUpdate) {
         Object.defineProperty(this, "player", {
             enumerable: true,
@@ -31,14 +31,20 @@ class BufferManager {
             enumerable: true,
             configurable: true,
             writable: true,
-            value: 30
-        }); // 目标缓冲秒数
+            value: 300
+        }); // 目标缓冲秒数 - 5分钟
         Object.defineProperty(this, "minPlayBuffer", {
             enumerable: true,
             configurable: true,
             writable: true,
-            value: 5
+            value: 10
         }); // 最小播放所需缓冲秒数
+        Object.defineProperty(this, "preloadBuffer", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: 60
+        }); // 预加载缓冲秒数
         Object.defineProperty(this, "isLoading", {
             enumerable: true,
             configurable: true,
@@ -69,6 +75,12 @@ class BufferManager {
             writable: true,
             value: null
         });
+        Object.defineProperty(this, "preloadInterval", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: null
+        });
         Object.defineProperty(this, "loadingTimeout", {
             enumerable: true,
             configurable: true,
@@ -93,57 +105,63 @@ class BufferManager {
             writable: true,
             value: false
         });
+        Object.defineProperty(this, "preloadWorker", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: null
+        });
+        Object.defineProperty(this, "bufferHistory", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: []
+        });
+        Object.defineProperty(this, "adaptiveBufferStrategy", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: true
+        });
         this.player = player;
         this.videoElement = videoElement;
         this.onBufferingChange = onBufferingChange;
         this.onBufferUpdate = onBufferUpdate;
         this.initialize();
     }
-    // 初始化缓冲管理器
+    // 初始化高级缓冲管理器
     initialize() {
         try {
-            if (!this.player || !this.videoElement) {
-                console.log('缓冲管理器: 初始化失败，播放器或视频元素不存在');
+            if (!this.player || !this.videoElement)
                 return;
-            }
-            // 确保事件绑定方法存在
-            if (typeof this.player.on !== 'function') {
-                console.error('缓冲管理器: 播放器对象不支持事件绑定，初始化失败');
+            if (typeof this.player.on !== 'function')
                 return;
-            }
-            // 绑定事件前先解绑，防止重复
-            try {
-                if (typeof this.player.off === 'function') {
-                    this.player.off('waiting', this.handleWaiting.bind(this));
-                    this.player.off('canplay', this.handleCanPlay.bind(this));
-                    this.player.off('progress', this.handleProgress.bind(this));
-                    this.player.off('dispose', this.dispose.bind(this));
-                }
-            }
-            catch (e) {
-                console.error('缓冲管理器: 解绑事件失败', e);
-            }
-            // 绑定方法到this，避免上下文问题
-            const boundHandleWaiting = this.handleWaiting.bind(this);
-            const boundHandleCanPlay = this.handleCanPlay.bind(this);
-            const boundHandleProgress = this.handleProgress.bind(this);
-            const boundDispose = this.dispose.bind(this);
-            // 监听缓冲事件
-            this.player.on('waiting', boundHandleWaiting);
-            this.player.on('canplay', boundHandleCanPlay);
-            this.player.on('progress', boundHandleProgress);
-            // 监听播放器销毁事件
-            this.player.on('dispose', () => {
-                console.log('缓冲管理器: 检测到播放器销毁，清理资源');
-                boundDispose();
-            });
-            // 启动缓冲检查定时器
-            this.startBufferCheck();
-            console.log('缓冲管理器: 初始化成功');
+            // 绑定事件
+            this.player.on('waiting', this.handleWaiting.bind(this));
+            this.player.on('canplay', this.handleCanPlay.bind(this));
+            this.player.on('progress', this.handleProgress.bind(this));
+            this.player.on('dispose', this.dispose.bind(this));
+            this.startDualThreadBuffering();
         }
         catch (e) {
-            console.error('缓冲管理器: 初始化失败', e);
+            // 静默处理初始化错误
         }
+    }
+    // 启动双线程缓冲系统
+    startDualThreadBuffering() {
+        this.startBufferCheck();
+        this.startPreloadThread();
+    }
+    // 预加载线程
+    startPreloadThread() {
+        if (this.preloadInterval) {
+            clearInterval(this.preloadInterval);
+        }
+        this.preloadInterval = window.setInterval(() => {
+            if (this.isPlayerValid() && !this.isDisposed) {
+                this.performPreload();
+            }
+        }, 5000); // 每5秒检查一次
     }
     // 检查播放器是否有效
     isPlayerValid() {
@@ -208,7 +226,6 @@ class BufferManager {
             // 已经释放过了，避免重复操作
             return;
         }
-        console.log('缓冲管理器: 开始释放资源');
         this.isDisposed = true;
         // 停止所有定时器
         this.stopBufferCheck();
@@ -221,17 +238,15 @@ class BufferManager {
             }
         }
         catch (e) {
-            console.error('缓冲管理器: 移除事件监听器失败', e);
+            // 静默处理错误
         }
         this.player = null;
         this.videoElement = null;
-        console.log('缓冲管理器: 已释放资源');
     }
     // 处理等待缓冲事件
     handleWaiting() {
         if (!this.isPlayerValid())
             return;
-        console.log('缓冲管理器: 检测到视频等待缓冲');
         this.isBuffering = true;
         this.onBufferingChange(true);
         // 安全地检查播放器状态
@@ -239,17 +254,15 @@ class BufferManager {
             // 如果播放器处于播放状态但缓冲不足，暂停播放器以积累更多缓冲
             if (this.player && typeof this.player.paused === 'function' &&
                 !this.player.paused() && this.getBufferAhead() < this.minPlayBuffer) {
-                console.log('缓冲管理器: 缓冲不足，暂停播放以积累缓冲');
                 this.pauseForBuffering();
             }
         }
         catch (e) {
-            console.error('缓冲管理器: 处理缓冲等待时出错', e);
+            // 静默处理错误
         }
     }
     // 处理可以播放事件
     handleCanPlay() {
-        console.log('缓冲管理器：视频可以播放');
         // 如果之前因缓冲不足而暂停，且现在有足够缓冲，则恢复播放
         if (this.pausedForBuffering && this.getBufferAhead() >= this.minPlayBuffer) {
             this.resumeFromBuffering();
@@ -313,12 +326,10 @@ class BufferManager {
             try {
                 // 缓冲不足，暂停以积累更多缓冲
                 if (bufferAhead < this.minPlayBuffer && !isPaused) {
-                    console.log(`缓冲管理器: 缓冲不足 (${bufferAhead.toFixed(2)}秒)，暂停播放以积累缓冲`);
                     this.pauseForBuffering();
                 }
                 // 已暂停且缓冲充足，恢复播放
                 else if (bufferAhead >= this.minPlayBuffer && this.pausedForBuffering) {
-                    console.log(`缓冲管理器: 缓冲充足 (${bufferAhead.toFixed(2)}秒)，恢复播放`);
                     this.resumeFromBuffering();
                 }
                 // 缓冲偏低，降低播放速度
@@ -367,7 +378,7 @@ class BufferManager {
             }
         }
         catch (e) {
-            console.error('缓冲管理器: 检查缓冲状态失败', e);
+            // 静默处理缓冲检查错误
         }
     }
     // 获取缓冲区信息
@@ -510,7 +521,6 @@ class BufferManager {
             this.pausedForBuffering = true;
             this.isBuffering = true;
             this.onBufferingChange(true);
-            console.log('缓冲管理器：已暂停播放以积累缓冲');
             // 创建缓冲指示器
             this.createBufferingIndicator();
             // 设置超时保护，防止长时间无法恢复
@@ -571,7 +581,6 @@ class BufferManager {
                     this.lastPlaybackRate = currentRate;
                 }
                 this.player.playbackRate(rate);
-                console.log(`缓冲管理器：调整播放速度到 ${rate}`);
             }
         }
         catch (e) {
@@ -618,71 +627,287 @@ class BufferManager {
             console.error('缓冲管理器：移除缓冲指示器失败', e);
         }
     }
-    // 尝试预加载更多内容
-    preloadMore() {
+    // 执行预加载操作 - 双线程系统
+    performPreload() {
         if (!this.player || !this.videoElement || this.isLoading)
             return;
         try {
-            this.isLoading = true;
-            // 使用Media Source Extensions或其他技术请求更多内容
-            // 对于HTML5 video标签，可以通过调整currentTime来触发浏览器加载更多内容
             const currentTime = this.player.currentTime();
             const duration = this.player.duration();
-            if (duration && currentTime < duration) {
-                // 在后台"触摸"缓冲区末尾附近，促使浏览器预加载更多内容
-                const bufferInfo = this.getBufferInfo();
-                if (bufferInfo.bufferAhead > 0) {
-                    // 查找当前缓冲区的结束位置
-                    const buffered = this.player.buffered();
-                    if (buffered && buffered.length > 0) {
-                        for (let i = 0; i < buffered.length; i++) {
-                            if (currentTime >= buffered.start(i) && currentTime <= buffered.end(i)) {
-                                const endPos = buffered.end(i);
-                                // 如果我们不在视频末尾，尝试"触摸"结束位置来促使预加载
-                                if (endPos < duration - 1) {
-                                    console.log(`缓冲管理器：预加载更多内容，触摸位置 ${endPos}`);
-                                    // 创建一个临时的音频元素来预加载，而不影响主播放器
-                                    const tempAudio = new Audio();
-                                    tempAudio.src = this.videoElement.src;
-                                    tempAudio.muted = true;
-                                    tempAudio.preload = 'auto';
-                                    // 设置开始位置在缓冲区末尾
-                                    tempAudio.addEventListener('loadedmetadata', () => {
-                                        tempAudio.currentTime = endPos;
-                                        // 触发预加载后立即停止
-                                        setTimeout(() => {
-                                            tempAudio.pause();
-                                            tempAudio.src = '';
-                                            this.isLoading = false;
-                                        }, 1000);
-                                    });
-                                    tempAudio.load();
-                                    // 防止任何可能的噪音
-                                    tempAudio.volume = 0;
-                                    // 短暂播放以触发加载
-                                    const playPromise = tempAudio.play();
-                                    if (playPromise !== undefined && typeof playPromise.catch === 'function') {
-                                        playPromise.catch(() => {
-                                            // 忽略自动播放错误
-                                            tempAudio.pause();
-                                            this.isLoading = false;
-                                        });
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
+            const bufferInfo = this.getBufferInfo();
+            if (!duration || currentTime >= duration)
+                return;
+            // 计算需要预加载的范围
+            const preloadStart = currentTime + bufferInfo.bufferAhead;
+            const preloadEnd = Math.min(currentTime + this.bufferTarget, duration);
+            const neededBuffer = preloadEnd - preloadStart;
+            if (neededBuffer > this.preloadBuffer) {
+                this.triggerBackgroundLoad(preloadStart, preloadEnd);
             }
-            // 短暂延迟后重置加载状态
-            setTimeout(() => {
-                this.isLoading = false;
-            }, 3000);
         }
         catch (e) {
-            console.error('缓冲管理器：预加载更多内容失败', e);
-            this.isLoading = false;
+            console.error('预加载线程失败:', e);
+        }
+    }
+    // 触发后台加载
+    triggerBackgroundLoad(start, end) {
+        if (!this.videoElement)
+            return;
+        try {
+            // 使用Range请求预加载内容
+            const preloadWorker = new Worker(URL.createObjectURL(new Blob([
+                `
+          self.onmessage = function(e) {
+            const {url, start, end} = e.data;
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', url, true);
+            xhr.setRequestHeader('Range', bytes=${start * 1000}-${end * 1000});
+            xhr.responseType = 'arraybuffer';
+            xhr.onload = () => {
+              self.postMessage({success: true, size: xhr.response.byteLength});
+            };
+            xhr.onerror = () => {
+              self.postMessage({success: false});
+            };
+            xhr.send();
+          };
+        `
+            ])));
+            preloadWorker.postMessage({
+                url: this.videoElement.src,
+                start: start,
+                end: end
+            });
+            preloadWorker.onmessage = (e) => {
+                if (e.data.success) {
+                }
+                preloadWorker.terminate();
+            };
+        }
+        catch (e) {
+            console.log('Web Workers不支持，使用备用预加载策略');
+            this.fallbackPreload(start, end);
+        }
+    }
+    // 备用预加载策略
+    fallbackPreload(start, end) {
+        try {
+            // 创建隐藏的video元素进行预加载
+            const preloadVideo = document.createElement('video');
+            preloadVideo.src = this.videoElement?.src || '';
+            preloadVideo.preload = 'auto';
+            preloadVideo.currentTime = start;
+            preloadVideo.style.display = 'none';
+            document.body.appendChild(preloadVideo);
+            preloadVideo.load();
+            setTimeout(() => {
+                document.body.removeChild(preloadVideo);
+            }, 5000);
+        }
+        catch (e) {
+            console.error('备用预加载失败:', e);
+        }
+    }
+    // 高级缓冲检查 - 自适应策略
+    checkBuffer() {
+        if (this.isDisposed || !this.isPlayerValid())
+            return;
+        try {
+            const { bufferAhead, totalBuffered } = this.getBufferInfo();
+            const currentTime = this.getCurrentTime();
+            const duration = this.getDuration();
+            // 记录缓冲历史
+            this.recordBufferHistory(currentTime, bufferAhead);
+            // 自适应缓冲策略
+            if (this.adaptiveBufferStrategy) {
+                this.applyAdaptiveStrategy(bufferAhead, totalBuffered);
+            }
+            else {
+                this.applyStandardStrategy(bufferAhead);
+            }
+            // 更新UI
+            this.onBufferUpdate(bufferAhead, totalBuffered);
+        }
+        catch (e) {
+            console.error('高级缓冲检查失败:', e);
+        }
+    }
+    // 记录缓冲历史用于分析
+    recordBufferHistory(currentTime, bufferAhead) {
+        this.bufferHistory.push({ time: Date.now(), bufferAhead });
+        // 保持历史记录在合理范围内
+        if (this.bufferHistory.length > 100) {
+            this.bufferHistory.shift();
+        }
+    }
+    // 自适应缓冲策略
+    applyAdaptiveStrategy(bufferAhead, totalBuffered) {
+        try {
+            const isPaused = this.isPlayerPaused();
+            // 分析缓冲趋势
+            const recentHistory = this.bufferHistory.slice(-10);
+            const avgBuffer = recentHistory.reduce((sum, h) => sum + h.bufferAhead, 0) / recentHistory.length;
+            const trend = recentHistory.length > 1 ?
+                recentHistory[recentHistory.length - 1].bufferAhead - recentHistory[0].bufferAhead : 0;
+            // 动态调整策略
+            if (avgBuffer < this.minPlayBuffer && !isPaused) {
+                // 缓冲不足，暂停播放
+                this.pauseForBuffering();
+            }
+            else if (this.pausedForBuffering && avgBuffer >= this.minPlayBuffer * 1.5) {
+                // 缓冲充足，恢复播放
+                this.resumeFromBuffering();
+            }
+            else if (trend < -2 && avgBuffer < 20) {
+                // 缓冲消耗过快，降低播放速度
+                this.adjustPlaybackRate(0.9);
+            }
+            else if (trend > 2 && avgBuffer > 30) {
+                // 缓冲积累良好，恢复速度
+                this.adjustPlaybackRate(this.lastPlaybackRate);
+            }
+        }
+        catch (e) {
+            console.error('自适应策略失败:', e);
+        }
+    }
+    // 标准缓冲策略
+    applyStandardStrategy(bufferAhead) {
+        try {
+            const isPaused = this.isPlayerPaused();
+            if (bufferAhead < this.minPlayBuffer && !isPaused) {
+                console.log(`标准策略: 缓冲不足 ${bufferAhead.toFixed(2)}s，暂停播放`);
+                this.pauseForBuffering();
+            }
+            else if (bufferAhead >= this.minPlayBuffer && this.pausedForBuffering) {
+                console.log(`标准策略: 缓冲充足 ${bufferAhead.toFixed(2)}s，恢复播放`);
+                this.resumeFromBuffering();
+            }
+        }
+        catch (e) {
+            console.error('标准策略失败:', e);
+        }
+    }
+    // 获取当前播放时间
+    getCurrentTime() {
+        try {
+            if (this.player && typeof this.player.currentTime === 'function') {
+                return this.player.currentTime() || 0;
+            }
+            return this.videoElement?.currentTime || 0;
+        }
+        catch (e) {
+            console.error('获取当前时间失败:', e);
+            return 0;
+        }
+    }
+    // 获取视频总时长
+    getDuration() {
+        try {
+            if (this.player && typeof this.player.duration === 'function') {
+                return this.player.duration() || 0;
+            }
+            return this.videoElement?.duration || 0;
+        }
+        catch (e) {
+            console.error('获取总时长失败:', e);
+            return 0;
+        }
+    }
+    // 检查是否暂停
+    isPlayerPaused() {
+        try {
+            if (this.player && typeof this.player.paused === 'function') {
+                return this.player.paused();
+            }
+            return this.videoElement?.paused || true;
+        }
+        catch (e) {
+            console.error('检查暂停状态失败:', e);
+            return true;
+        }
+    }
+    // 增强的缓冲状态检查
+    getBufferInfo() {
+        if (this.isDisposed) {
+            return { bufferAhead: 0, totalBuffered: 0 };
+        }
+        try {
+            if (!this.player)
+                return { bufferAhead: 0, totalBuffered: 0 };
+            const currentTime = this.getCurrentTime();
+            let bufferAhead = 0;
+            let totalBuffered = 0;
+            // 获取缓冲区信息
+            let buffered = null;
+            try {
+                if (this.player && typeof this.player.buffered === 'function') {
+                    buffered = this.player.buffered();
+                }
+                else if (this.videoElement) {
+                    buffered = this.videoElement.buffered;
+                }
+            }
+            catch (e) {
+                console.error('获取缓冲区失败:', e);
+            }
+            if (!buffered || buffered.length === 0) {
+                return { bufferAhead: 0, totalBuffered: 0 };
+            }
+            // 计算缓冲信息
+            for (let i = 0; i < buffered.length; i++) {
+                try {
+                    const start = buffered.start(i) || 0;
+                    const end = buffered.end(i) || 0;
+                    totalBuffered += end - start;
+                    if (currentTime >= start && currentTime <= end) {
+                        bufferAhead = end - currentTime;
+                    }
+                }
+                catch (e) {
+                    console.error(`计算缓冲区段 ${i} 失败:`, e);
+                }
+            }
+            return { bufferAhead, totalBuffered };
+        }
+        catch (e) {
+            console.error('获取缓冲信息失败:', e);
+            return { bufferAhead: 0, totalBuffered: 0 };
+        }
+    }
+    // 清理资源
+    dispose() {
+        if (this.isDisposed)
+            return;
+        this.isDisposed = true;
+        // 停止所有定时器
+        this.stopBufferCheck();
+        this.stopPreloadThread();
+        // 清理Web Workers
+        if (this.preloadWorker) {
+            this.preloadWorker.terminate();
+            this.preloadWorker = null;
+        }
+        // 移除事件监听器
+        try {
+            if (this.player && typeof this.player.off === 'function') {
+                this.player.off('waiting', this.handleWaiting.bind(this));
+                this.player.off('canplay', this.handleCanPlay.bind(this));
+                this.player.off('progress', this.handleProgress.bind(this));
+            }
+        }
+        catch (e) {
+            // 静默处理
+        }
+        this.player = null;
+        this.videoElement = null;
+        this.bufferHistory = [];
+    }
+    // 停止预加载线程
+    stopPreloadThread() {
+        if (this.preloadInterval) {
+            clearInterval(this.preloadInterval);
+            this.preloadInterval = null;
         }
     }
 }
@@ -871,13 +1096,15 @@ const Player = () => {
         }
         navigate(-1);
     };
-    // 恢复键盘事件处理函数
+    // 恢复键盘事件处理函数 - 增强版
     const handleKeyDown = (e) => {
         if (!playerRef.current)
             return;
         switch (e.key) {
             case ' ':
-                // 空格键暂停/播放
+            case 'k':
+            case 'K':
+                // 空格键或K键暂停/播放
                 if (playerRef.current.paused()) {
                     playerRef.current.play();
                 }
@@ -887,23 +1114,64 @@ const Player = () => {
                 e.preventDefault();
                 break;
             case 'ArrowRight':
-                // 右箭头前进10秒
-                playerRef.current.currentTime(playerRef.current.currentTime() + 10);
+                // 右箭头 - 根据修饰键调整快进秒数
+                const rightStep = e.ctrlKey ? 60 : e.shiftKey ? 30 : 10;
+                const newTime = Math.min(playerRef.current.currentTime() + rightStep, playerRef.current.duration() || Infinity);
+                playerRef.current.currentTime(newTime);
+                showSeekFeedback(`快进 ${rightStep} 秒`);
                 e.preventDefault();
                 break;
             case 'ArrowLeft':
-                // 左箭头后退10秒
-                playerRef.current.currentTime(playerRef.current.currentTime() - 10);
+                // 左箭头 - 根据修饰键调整后退秒数
+                const leftStep = e.ctrlKey ? 60 : e.shiftKey ? 30 : 10;
+                const prevTime = Math.max(playerRef.current.currentTime() - leftStep, 0);
+                playerRef.current.currentTime(prevTime);
+                showSeekFeedback(`后退 ${leftStep} 秒`);
                 e.preventDefault();
                 break;
             case 'ArrowUp':
                 // 上箭头增加音量
-                playerRef.current.volume(Math.min(playerRef.current.volume() + 0.1, 1));
+                const newVolume = Math.min(playerRef.current.volume() + 0.1, 1);
+                playerRef.current.volume(newVolume);
+                showVolumeFeedback(`音量 ${Math.round(newVolume * 100)}%`);
                 e.preventDefault();
                 break;
             case 'ArrowDown':
                 // 下箭头减小音量
-                playerRef.current.volume(Math.max(playerRef.current.volume() - 0.1, 0));
+                const lowerVolume = Math.max(playerRef.current.volume() - 0.1, 0);
+                playerRef.current.volume(lowerVolume);
+                showVolumeFeedback(`音量 ${Math.round(lowerVolume * 100)}%`);
+                e.preventDefault();
+                break;
+            case 'l':
+            case 'L':
+                // L键前进10秒
+                const lTime = Math.min(playerRef.current.currentTime() + 10, playerRef.current.duration() || Infinity);
+                playerRef.current.currentTime(lTime);
+                showSeekFeedback('快进 10 秒');
+                e.preventDefault();
+                break;
+            case 'j':
+            case 'J':
+                // J键后退10秒
+                const jTime = Math.max(playerRef.current.currentTime() - 10, 0);
+                playerRef.current.currentTime(jTime);
+                showSeekFeedback('后退 10 秒');
+                e.preventDefault();
+                break;
+            case 'Home':
+                // Home键回到开头
+                playerRef.current.currentTime(0);
+                showSeekFeedback('回到开头');
+                e.preventDefault();
+                break;
+            case 'End':
+                // End键跳到结尾
+                const duration = playerRef.current.duration();
+                if (duration) {
+                    playerRef.current.currentTime(duration);
+                    showSeekFeedback('跳到结尾');
+                }
                 e.preventDefault();
                 break;
             case 'n':
@@ -926,6 +1194,33 @@ const Player = () => {
                 }
                 else {
                     playerRef.current.requestFullscreen();
+                }
+                e.preventDefault();
+                break;
+            case 'm':
+            case 'M':
+                // M键静音/取消静音
+                playerRef.current.muted(!playerRef.current.muted());
+                showVolumeFeedback(playerRef.current.muted() ? '已静音' : '已取消静音');
+                e.preventDefault();
+                break;
+            case '0':
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+            case '6':
+            case '7':
+            case '8':
+            case '9':
+                // 数字键跳转到视频进度的百分比
+                const percent = parseInt(e.key) * 10;
+                const duration = playerRef.current.duration();
+                if (duration) {
+                    const targetTime = (duration * percent) / 100;
+                    playerRef.current.currentTime(targetTime);
+                    showSeekFeedback(`跳转到 ${percent}%`);
                 }
                 e.preventDefault();
                 break;
@@ -981,33 +1276,17 @@ const Player = () => {
                 setError('缺少媒体项ID');
                 return;
             }
-            // 每次请求前同步一次服务器URL
-            syncServerUrl();
-            if (!serverUrl) {
-                // 显示友好的错误信息，让用户自行决定
-                console.log('服务器URL不存在，无法获取媒体信息');
+            if (!serverUrl || !token) {
                 setLoading(false);
-                setError('正在连接到服务器，请稍等');
-                return;
-            }
-            if (!token) {
-                // 显示友好的错误信息，让用户自行决定
-                console.log('未找到登录凭证，无法继续播放');
-                setLoading(false);
-                setError('登录凭证已失效，请返回首页重新登录');
                 return;
             }
             try {
-                console.log('开始获取媒体项信息，ID:', id);
                 const apiClient = getApiClient();
                 const response = await apiClient.get(`/Users/${userId}/Items/${id}`);
                 if (response.data) {
                     const item = response.data;
                     setItemInfo(item);
-                    console.log('媒体项信息获取成功:', item.Name, '类型:', item.Type);
-                    // 检查是否为剧集
                     if (item.Type === 'Episode') {
-                        console.log('检测到剧集类型，设置isEpisode=true');
                         setIsEpisode(true);
                         setSeasonId(item.SeasonId);
                         setSeriesId(item.SeriesId);
@@ -1023,31 +1302,15 @@ const Player = () => {
                             RunTimeTicks: item.RunTimeTicks,
                             ParentIndexNumber: item.ParentIndexNumber
                         });
-                        console.log('已设置当前剧集:', item.SeriesName, 'S' + item.ParentIndexNumber + 'E' + item.IndexNumber);
-                        // 获取该剧集所在季的所有剧集
                         await fetchEpisodesForSeason(item.SeasonId);
                     }
-                    else {
-                        // 不是剧集时，重置状态
-                        console.log('非剧集类型，设置isEpisode=false');
-                        setIsEpisode(false);
-                        setSeasonId(null);
-                        setSeriesId(null);
-                    }
-                    // 获取播放信息和媒体流
                     fetchPlaybackInfo(item.Id);
-                    // 获取推荐内容
-                    setTimeout(() => {
-                        if (!recommendedItems.length && !recommendedLoading) {
-                            console.log('延迟获取推荐内容');
-                            fetchRecommendedItems();
-                        }
-                    }, 1000);
+                    if (!recommendedItems.length && !recommendedLoading) {
+                        fetchRecommendedItems();
+                    }
                 }
             }
             catch (error) {
-                console.error('获取媒体项信息失败:', error);
-                setError('获取媒体信息失败，请检查网络连接或刷新重试');
                 setLoading(false);
             }
         };
@@ -1057,26 +1320,18 @@ const Player = () => {
     }, [id, serverUrl, token, userId, getApiClient, recommendedItems.length, recommendedLoading]);
     // 获取播放信息和媒体流
     const fetchPlaybackInfo = async (itemId) => {
-        // 确保使用最新的服务器URL
         const currentServerUrl = localStorage.getItem('emby_serverUrl') || serverUrl;
-        const currentToken = token; // 缓存当前token，避免在请求过程中变化
+        const currentToken = token;
         if (!currentServerUrl || !currentToken || !itemId) {
-            setError('缺少必要参数，请确保已登录并选择正确的服务器');
             setLoading(false);
             return;
         }
-        // 如果服务器URL已变更，则更新状态
         if (currentServerUrl !== serverUrl) {
-            console.log('检测到服务器URL不匹配，正在更新:', currentServerUrl);
             setServerUrl(currentServerUrl);
         }
         try {
-            console.log(`获取播放信息，使用服务器: ${currentServerUrl}, ID: ${itemId}`);
             const apiClient = getApiClient();
-            // 显式构建完整URL，确保使用最新服务器地址
-            const playbackInfoUrl = `${currentServerUrl}/emby/Items/${itemId}/PlaybackInfo`;
-            console.log('请求URL:', playbackInfoUrl);
-            const response = await apiClient.post(playbackInfoUrl, {
+            const response = await apiClient.post(`${currentServerUrl}/emby/Items/${itemId}/PlaybackInfo`, {
                 UserId: userId,
                 DeviceProfile: {
                     MaxStreamingBitrate: 120000000,
@@ -1095,32 +1350,26 @@ const Player = () => {
             });
             if (response.data && response.data.MediaSources && response.data.MediaSources.length > 0) {
                 const mediaSourceData = response.data.MediaSources[0];
-                console.log('获取到完整媒体源信息:', JSON.stringify(mediaSourceData, null, 2).substring(0, 500) + '...');
                 setMediaSource(mediaSourceData);
-                // 提取不同码率的媒体流
                 const streams = [];
-                // 添加自动选择选项
                 streams.push({
                     id: 'auto',
                     name: '自动',
                     bitrate: 0,
                     url: getStreamUrl(mediaSourceData.Id, itemId)
                 });
-                // 添加直连选项
                 streams.push({
                     id: 'direct',
                     name: '直连',
                     bitrate: mediaSourceData.Bitrate || 0,
                     url: getStreamUrl(mediaSourceData.Id, itemId)
                 });
-                // 添加HLS选项
                 streams.push({
                     id: 'hls',
                     name: 'HLS流',
                     bitrate: mediaSourceData.Bitrate || 0,
                     url: getStreamUrl(mediaSourceData.Id, itemId)
                 });
-                // 添加MP4转码选项
                 streams.push({
                     id: 'mp4',
                     name: 'MP4转码',
@@ -1128,33 +1377,20 @@ const Player = () => {
                     url: getStreamUrl(mediaSourceData.Id, itemId)
                 });
                 setMediaStreams(streams);
-                console.log('设置媒体流:', streams);
-                // 提取并处理字幕流
                 if (mediaSourceData.MediaStreams) {
-                    // 找出所有字幕流
                     const subtitleStreams = mediaSourceData.MediaStreams.filter((stream) => stream.Type === 'Subtitle');
-                    console.log(`找到 ${subtitleStreams.length} 个字幕流`);
-                    // 如果有字幕流，准备加载字幕
                     if (subtitleStreams.length > 0) {
-                        // 将字幕流信息保存起来，以便后续使用
                         setSubtitleStreams(subtitleStreams);
                         fetchSubtitles(itemId, subtitleStreams);
                     }
                 }
             }
-            else {
-                console.error('未获取到媒体源信息');
-            }
         }
         catch (error) {
-            console.error('获取播放信息失败:', error);
-            // 检查是否为401授权错误
             if (error.response && error.response.status === 401) {
                 handle401Error(error);
             }
             else {
-                // 其他类型错误
-                setError(`获取媒体信息失败: ${error.message || '未知错误'}`);
                 setLoading(false);
             }
         }
@@ -1163,17 +1399,12 @@ const Player = () => {
     const fetchEpisodesForSeason = async (seasonId) => {
         if (!seasonId || !token || !userId)
             return;
-        // 确保使用最新的服务器URL
         const currentServerUrl = localStorage.getItem('emby_serverUrl') || serverUrl;
-        if (!currentServerUrl) {
-            console.error('未找到服务器URL，无法获取剧集');
+        if (!currentServerUrl)
             return;
-        }
         try {
             setEpisodesLoading(true);
-            console.log('开始获取季节剧集，服务器:', currentServerUrl, '季节ID:', seasonId);
             const apiClient = getApiClient();
-            // 直接使用标准的Episodes接口，更可靠
             const response = await apiClient.get(`${currentServerUrl}/emby/Shows/${seasonId}/Episodes`, {
                 params: {
                     userId: userId,
@@ -1184,11 +1415,6 @@ const Player = () => {
                 }
             });
             if (!response.data || !response.data.Items) {
-                console.error('获取剧集响应异常:', response);
-                message.error('获取剧集失败: 响应格式不正确');
-                setEpisodesLoading(false);
-                // 尝试备用方法获取剧集
-                console.log('尝试备用方法获取剧集...');
                 await fetchEpisodesAlternative(seasonId);
                 return;
             }
@@ -1204,15 +1430,10 @@ const Player = () => {
                 RunTimeTicks: item.RunTimeTicks,
                 ParentIndexNumber: item.ParentIndexNumber
             }));
-            // 按集数排序
             episodes.sort((a, b) => (a.IndexNumber || 0) - (b.IndexNumber || 0));
-            console.log(`获取到 ${episodes.length} 集剧集`);
             setEpisodesList(episodes);
         }
         catch (error) {
-            console.error('获取季节剧集失败:', error);
-            message.error('获取剧集列表失败，尝试备用方法...');
-            // 尝试备用方法获取剧集
             await fetchEpisodesAlternative(seasonId);
         }
         finally {
@@ -1689,7 +1910,6 @@ const Player = () => {
                     hotkeys: true
                 }
             };
-            console.log(`初始化播放器，URL: ${videoUrl}`);
             // 初始化播放器
             const player = videojs(videoElement, config);
             // 确保控制栏正常工作
@@ -1743,7 +1963,6 @@ const Player = () => {
                 // 尝试解除静音
                 player.muted(false);
                 player.volume(1.0);
-                console.log('播放器就绪，音量:', player.volume(), '静音状态:', player.muted());
                 // 改进进度条点击和拖动功能
                 function enhanceProgressControl() {
                     try {
@@ -1841,15 +2060,8 @@ const Player = () => {
                 catch (e) {
                     console.error('设置音频轨道时出错:', e);
                 }
-                // 检查并报告视频状态
-                console.log('视频元素就绪:', {
-                    音量: player.volume(),
-                    静音: player.muted(),
-                    自动播放: player.autoplay()
-                });
                 // 如果有字幕流，添加字幕按钮
                 if (subtitleStreams && subtitleStreams.length > 0) {
-                    console.log(`播放器准备好，发现${subtitleStreams.length}个字幕流`);
                     // 自动选择第一个字幕
                     if (currentSubtitleIndex === null && subtitleStreams.length > 0) {
                         const firstSubtitleIndex = subtitleStreams[0].Index;
@@ -2047,11 +2259,9 @@ const Player = () => {
                 }
             });
             player.on('canplay', () => {
-                console.log('视频可以播放');
                 setBuffering(false);
             });
             player.on('playing', () => {
-                console.log('视频开始播放');
                 setLoading(false);
                 setBuffering(false);
                 setIsPlaying(true); // 标记视频正在播放
@@ -2202,38 +2412,27 @@ const Player = () => {
                     console.error('调用播放失败:', e);
                 }
             }
-            // 在这里添加缓冲管理器的初始化代码
-            console.log('播放器就绪，开始设置缓冲管理器');
-            // 确保视频元素准备就绪
+            // 初始化缓冲管理器
             setTimeout(() => {
-                // 创建缓冲管理器实例
                 if (videoElement && !bufferManagerRef.current) {
-                    try {
-                        const handleBufferingChange = (buffering) => {
-                            setBuffering(buffering);
-                            // 更新UI上的缓冲状态
-                            if (buffering) {
-                                setBufferingMessage('视频缓冲中...');
-                            }
-                            else {
-                                setBufferingMessage(null);
-                            }
-                        };
-                        const handleBufferUpdate = (bufferAhead, totalBuffered) => {
-                            setBufferAhead(bufferAhead);
-                            setTotalBuffered(totalBuffered);
-                        };
-                        bufferManagerRef.current = new BufferManager(player, videoElement, handleBufferingChange, handleBufferUpdate);
-                        console.log('缓冲管理器创建完成');
-                    }
-                    catch (e) {
-                        console.error('创建缓冲管理器失败:', e);
-                    }
+                    const handleBufferingChange = (buffering) => {
+                        setBuffering(buffering);
+                        if (buffering) {
+                            setBufferingMessage('视频缓冲中...');
+                        }
+                        else {
+                            setBufferingMessage(null);
+                        }
+                    };
+                    const handleBufferUpdate = (bufferAhead, totalBuffered) => {
+                        setBufferAhead(bufferAhead);
+                        setTotalBuffered(totalBuffered);
+                    };
+                    bufferManagerRef.current = new BufferManager(player, videoElement, handleBufferingChange, handleBufferUpdate);
                 }
-            }, 1000); // 延迟创建缓冲管理器，确保播放器和视频元素都已准备就绪
+            }, 1000);
         }
         catch (e) {
-            console.error('初始化播放器失败:', e);
             setError('初始化播放器失败，请刷新页面重试');
             setLoading(false);
         }
@@ -2448,7 +2647,6 @@ const Player = () => {
     // 添加一个useEffect，在首次加载时尝试使用初始化播放器
     useEffect(() => {
         if (mediaSource && !playerInitializedRef.current) {
-            console.log('首次加载尝试初始化播放器');
             initializePlayer(0);
         }
     }, [mediaSource]);
@@ -2481,7 +2679,6 @@ const Player = () => {
     useEffect(() => {
         // 当服务器URL变化时，重新初始化播放器
         if (serverUrl && id && mediaSource) {
-            console.log('服务器URL已变更，重新初始化播放器');
             reinitializePlayer();
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2679,6 +2876,52 @@ const Player = () => {
             setRecommendedLoading(false);
         }
     }, [id]);
+    // 显示键盘操作反馈
+    const showSeekFeedback = (message) => {
+        const feedback = document.createElement('div');
+        feedback.className = 'keyboard-feedback';
+        feedback.textContent = message;
+        feedback.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 10px 20px;
+      border-radius: 5px;
+      font-size: 16px;
+      z-index: 1000;
+      pointer-events: none;
+      animation: fadeInOut 0.5s ease-in-out;
+    `;
+        document.body.appendChild(feedback);
+        setTimeout(() => {
+            feedback.remove();
+        }, 1500);
+    };
+    const showVolumeFeedback = (message) => {
+        const feedback = document.createElement('div');
+        feedback.className = 'volume-feedback';
+        feedback.textContent = message;
+        feedback.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 8px 16px;
+      border-radius: 4px;
+      font-size: 14px;
+      z-index: 1000;
+      pointer-events: none;
+      animation: slideInOut 0.3s ease-in-out;
+    `;
+        document.body.appendChild(feedback);
+        setTimeout(() => {
+            feedback.remove();
+        }, 2000);
+    };
     // 主要渲染函数
     return (_jsxs("div", { className: "player-container", children: [_jsxs("div", { className: "video-area", ref: videoContainerRef, style: {
                     position: 'relative',
