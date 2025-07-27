@@ -70,21 +70,26 @@ declare global {
   }
 }
 
-// 改进缓冲管理器类，增强空值检查
-class BufferManager {
+// 高级双线程缓冲管理器类
+class AdvancedBufferManager {
   private player: any;
   private videoElement: HTMLVideoElement | null = null;
-  private bufferTarget: number = 30; // 目标缓冲秒数
-  private minPlayBuffer: number = 5; // 最小播放所需缓冲秒数
+  private bufferTarget: number = 300; // 目标缓冲秒数 - 5分钟
+  private minPlayBuffer: number = 10; // 最小播放所需缓冲秒数
+  private preloadBuffer: number = 60; // 预加载缓冲秒数
   private isLoading: boolean = false;
   private isBuffering: boolean = false;
   private onBufferingChange: (buffering: boolean) => void;
   private onBufferUpdate: (bufferAhead: number, totalBuffered: number) => void;
   private bufferCheckInterval: number | null = null;
+  private preloadInterval: number | null = null;
   private loadingTimeout: number | null = null;
   private pausedForBuffering: boolean = false;
   private lastPlaybackRate: number = 1;
   private isDisposed: boolean = false;
+  private preloadWorker: Worker | null = null;
+  private bufferHistory: Array<{time: number, bufferAhead: number}> = [];
+  private adaptiveBufferStrategy: boolean = true;
 
   constructor(
     player: any, 
@@ -99,17 +104,17 @@ class BufferManager {
     this.initialize();
   }
 
-  // 初始化缓冲管理器
+  // 初始化高级缓冲管理器
   private initialize(): void {
     try {
       if (!this.player || !this.videoElement) {
-        console.log('缓冲管理器: 初始化失败，播放器或视频元素不存在');
+        console.log('高级缓冲管理器: 初始化失败，播放器或视频元素不存在');
         return;
       }
 
       // 确保事件绑定方法存在
       if (typeof this.player.on !== 'function') {
-        console.error('缓冲管理器: 播放器对象不支持事件绑定，初始化失败');
+        console.error('高级缓冲管理器: 播放器对象不支持事件绑定，初始化失败');
         return;
       }
 
@@ -122,7 +127,7 @@ class BufferManager {
           this.player.off('dispose', this.dispose.bind(this));
         }
       } catch (e) {
-        console.error('缓冲管理器: 解绑事件失败', e);
+        console.error('高级缓冲管理器: 解绑事件失败', e);
       }
 
       // 绑定方法到this，避免上下文问题
@@ -138,16 +143,35 @@ class BufferManager {
       
       // 监听播放器销毁事件
       this.player.on('dispose', () => {
-        console.log('缓冲管理器: 检测到播放器销毁，清理资源');
+        console.log('高级缓冲管理器: 检测到播放器销毁，清理资源');
         boundDispose();
       });
       
-      // 启动缓冲检查定时器
-      this.startBufferCheck();
-      console.log('缓冲管理器: 初始化成功');
+      // 启动双线程缓冲系统
+      this.startDualThreadBuffering();
+      console.log('高级缓冲管理器: 初始化成功，启动双线程缓冲');
     } catch (e) {
-      console.error('缓冲管理器: 初始化失败', e);
+      console.error('高级缓冲管理器: 初始化失败', e);
     }
+  }
+
+  // 启动双线程缓冲系统
+  private startDualThreadBuffering(): void {
+    this.startBufferCheck();
+    this.startPreloadThread();
+  }
+
+  // 预加载线程
+  private startPreloadThread(): void {
+    if (this.preloadInterval) {
+      clearInterval(this.preloadInterval);
+    }
+    
+    this.preloadInterval = window.setInterval(() => {
+      if (this.isPlayerValid() && !this.isDisposed) {
+        this.performPreload();
+      }
+    }, 5000); // 每5秒检查一次
   }
 
   // 检查播放器是否有效
@@ -652,78 +676,314 @@ class BufferManager {
     }
   }
 
-  // 尝试预加载更多内容
-  private preloadMore(): void {
+  // 执行预加载操作 - 双线程系统
+  private performPreload(): void {
     if (!this.player || !this.videoElement || this.isLoading) return;
     
     try {
-      this.isLoading = true;
-      
-      // 使用Media Source Extensions或其他技术请求更多内容
-      // 对于HTML5 video标签，可以通过调整currentTime来触发浏览器加载更多内容
       const currentTime = this.player.currentTime();
       const duration = this.player.duration();
+      const bufferInfo = this.getBufferInfo();
       
-      if (duration && currentTime < duration) {
-        // 在后台"触摸"缓冲区末尾附近，促使浏览器预加载更多内容
-        const bufferInfo = this.getBufferInfo();
-        if (bufferInfo.bufferAhead > 0) {
-          // 查找当前缓冲区的结束位置
-          const buffered = this.player.buffered();
-          if (buffered && buffered.length > 0) {
-            for (let i = 0; i < buffered.length; i++) {
-              if (currentTime >= buffered.start(i) && currentTime <= buffered.end(i)) {
-                const endPos = buffered.end(i);
-                
-                // 如果我们不在视频末尾，尝试"触摸"结束位置来促使预加载
-                if (endPos < duration - 1) {
-                  console.log(`缓冲管理器：预加载更多内容，触摸位置 ${endPos}`);
-                  
-                  // 创建一个临时的音频元素来预加载，而不影响主播放器
-                  const tempAudio = new Audio();
-                  tempAudio.src = this.videoElement.src;
-                  tempAudio.muted = true;
-                  tempAudio.preload = 'auto';
-                  
-                  // 设置开始位置在缓冲区末尾
-                  tempAudio.addEventListener('loadedmetadata', () => {
-                    tempAudio.currentTime = endPos;
-                    // 触发预加载后立即停止
-                    setTimeout(() => {
-                      tempAudio.pause();
-                      tempAudio.src = '';
-                      this.isLoading = false;
-                    }, 1000);
-                  });
-                  
-                  tempAudio.load();
-                  // 防止任何可能的噪音
-                  tempAudio.volume = 0;
-                  // 短暂播放以触发加载
-                  const playPromise = tempAudio.play();
-                  if (playPromise !== undefined && typeof playPromise.catch === 'function') {
-                    playPromise.catch(() => {
-                      // 忽略自动播放错误
-                      tempAudio.pause();
-                      this.isLoading = false;
-                    });
-                  }
-                  
-                  break;
-                }
-              }
-            }
+      if (!duration || currentTime >= duration) return;
+      
+      // 计算需要预加载的范围
+      const preloadStart = currentTime + bufferInfo.bufferAhead;
+      const preloadEnd = Math.min(currentTime + this.bufferTarget, duration);
+      const neededBuffer = preloadEnd - preloadStart;
+      
+      if (neededBuffer > this.preloadBuffer) {
+        console.log(`预加载线程: 需要预加载 ${neededBuffer.toFixed(2)} 秒内容`);
+        this.triggerBackgroundLoad(preloadStart, preloadEnd);
+      }
+    } catch (e) {
+      console.error('预加载线程失败:', e);
+    }
+  }
+
+  // 触发后台加载
+  private triggerBackgroundLoad(start: number, end: number): void {
+    if (!this.videoElement) return;
+    
+    try {
+      // 使用Range请求预加载内容
+      const preloadWorker = new Worker(URL.createObjectURL(new Blob([
+        `
+          self.onmessage = function(e) {
+            const {url, start, end} = e.data;
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', url, true);
+            xhr.setRequestHeader('Range', bytes=${start * 1000}-${end * 1000});
+            xhr.responseType = 'arraybuffer';
+            xhr.onload = () => {
+              self.postMessage({success: true, size: xhr.response.byteLength});
+            };
+            xhr.onerror = () => {
+              self.postMessage({success: false});
+            };
+            xhr.send();
+          };
+        `
+      ])));
+      
+      preloadWorker.postMessage({
+        url: this.videoElement.src,
+        start: start,
+        end: end
+      });
+      
+      preloadWorker.onmessage = (e) => {
+        if (e.data.success) {
+          console.log(`预加载完成: ${e.data.size} bytes`);
+        }
+        preloadWorker.terminate();
+      };
+      
+    } catch (e) {
+      console.log('Web Workers不支持，使用备用预加载策略');
+      this.fallbackPreload(start, end);
+    }
+  }
+
+  // 备用预加载策略
+  private fallbackPreload(start: number, end: number): void {
+    try {
+      // 创建隐藏的video元素进行预加载
+      const preloadVideo = document.createElement('video');
+      preloadVideo.src = this.videoElement?.src || '';
+      preloadVideo.preload = 'auto';
+      preloadVideo.currentTime = start;
+      preloadVideo.style.display = 'none';
+      
+      document.body.appendChild(preloadVideo);
+      preloadVideo.load();
+      
+      setTimeout(() => {
+        document.body.removeChild(preloadVideo);
+      }, 5000);
+      
+    } catch (e) {
+      console.error('备用预加载失败:', e);
+    }
+  }
+
+  // 高级缓冲检查 - 自适应策略
+  private checkBuffer(): void {
+    if (this.isDisposed || !this.isPlayerValid()) return;
+    
+    try {
+      const { bufferAhead, totalBuffered } = this.getBufferInfo();
+      const currentTime = this.getCurrentTime();
+      const duration = this.getDuration();
+      
+      // 记录缓冲历史
+      this.recordBufferHistory(currentTime, bufferAhead);
+      
+      // 自适应缓冲策略
+      if (this.adaptiveBufferStrategy) {
+        this.applyAdaptiveStrategy(bufferAhead, totalBuffered);
+      } else {
+        this.applyStandardStrategy(bufferAhead);
+      }
+      
+      // 更新UI
+      this.onBufferUpdate(bufferAhead, totalBuffered);
+      
+    } catch (e) {
+      console.error('高级缓冲检查失败:', e);
+    }
+  }
+
+  // 记录缓冲历史用于分析
+  private recordBufferHistory(currentTime: number, bufferAhead: number): void {
+    this.bufferHistory.push({ time: Date.now(), bufferAhead });
+    
+    // 保持历史记录在合理范围内
+    if (this.bufferHistory.length > 100) {
+      this.bufferHistory.shift();
+    }
+  }
+
+  // 自适应缓冲策略
+  private applyAdaptiveStrategy(bufferAhead: number, totalBuffered: number): void {
+    try {
+      const isPaused = this.isPlayerPaused();
+      
+      // 分析缓冲趋势
+      const recentHistory = this.bufferHistory.slice(-10);
+      const avgBuffer = recentHistory.reduce((sum, h) => sum + h.bufferAhead, 0) / recentHistory.length;
+      const trend = recentHistory.length > 1 ? 
+        recentHistory[recentHistory.length - 1].bufferAhead - recentHistory[0].bufferAhead : 0;
+      
+      // 动态调整策略
+      if (avgBuffer < this.minPlayBuffer && !isPaused) {
+        // 缓冲不足，暂停播放
+        console.log(`自适应策略: 缓冲不足 ${avgBuffer.toFixed(2)}s，暂停播放`);
+        this.pauseForBuffering();
+      } else if (this.pausedForBuffering && avgBuffer >= this.minPlayBuffer * 1.5) {
+        // 缓冲充足，恢复播放
+        console.log(`自适应策略: 缓冲充足 ${avgBuffer.toFixed(2)}s，恢复播放`);
+        this.resumeFromBuffering();
+      } else if (trend < -2 && avgBuffer < 20) {
+        // 缓冲消耗过快，降低播放速度
+        this.adjustPlaybackRate(0.9);
+      } else if (trend > 2 && avgBuffer > 30) {
+        // 缓冲积累良好，恢复速度
+        this.adjustPlaybackRate(this.lastPlaybackRate);
+      }
+      
+    } catch (e) {
+      console.error('自适应策略失败:', e);
+    }
+  }
+
+  // 标准缓冲策略
+  private applyStandardStrategy(bufferAhead: number): void {
+    try {
+      const isPaused = this.isPlayerPaused();
+      
+      if (bufferAhead < this.minPlayBuffer && !isPaused) {
+        console.log(`标准策略: 缓冲不足 ${bufferAhead.toFixed(2)}s，暂停播放`);
+        this.pauseForBuffering();
+      } else if (bufferAhead >= this.minPlayBuffer && this.pausedForBuffering) {
+        console.log(`标准策略: 缓冲充足 ${bufferAhead.toFixed(2)}s，恢复播放`);
+        this.resumeFromBuffering();
+      }
+    } catch (e) {
+      console.error('标准策略失败:', e);
+    }
+  }
+
+  // 获取当前播放时间
+  private getCurrentTime(): number {
+    try {
+      if (this.player && typeof this.player.currentTime === 'function') {
+        return this.player.currentTime() || 0;
+      }
+      return this.videoElement?.currentTime || 0;
+    } catch (e) {
+      console.error('获取当前时间失败:', e);
+      return 0;
+    }
+  }
+
+  // 获取视频总时长
+  private getDuration(): number {
+    try {
+      if (this.player && typeof this.player.duration === 'function') {
+        return this.player.duration() || 0;
+      }
+      return this.videoElement?.duration || 0;
+    } catch (e) {
+      console.error('获取总时长失败:', e);
+      return 0;
+    }
+  }
+
+  // 检查是否暂停
+  private isPlayerPaused(): boolean {
+    try {
+      if (this.player && typeof this.player.paused === 'function') {
+        return this.player.paused();
+      }
+      return this.videoElement?.paused || true;
+    } catch (e) {
+      console.error('检查暂停状态失败:', e);
+      return true;
+    }
+  }
+
+  // 增强的缓冲状态检查
+  private getBufferInfo(): { bufferAhead: number, totalBuffered: number } {
+    if (this.isDisposed) {
+      return { bufferAhead: 0, totalBuffered: 0 };
+    }
+    
+    try {
+      if (!this.player) return { bufferAhead: 0, totalBuffered: 0 };
+      
+      const currentTime = this.getCurrentTime();
+      let bufferAhead = 0;
+      let totalBuffered = 0;
+      
+      // 获取缓冲区信息
+      let buffered = null;
+      try {
+        if (this.player && typeof this.player.buffered === 'function') {
+          buffered = this.player.buffered();
+        } else if (this.videoElement) {
+          buffered = this.videoElement.buffered;
+        }
+      } catch (e) {
+        console.error('获取缓冲区失败:', e);
+      }
+      
+      if (!buffered || buffered.length === 0) {
+        return { bufferAhead: 0, totalBuffered: 0 };
+      }
+      
+      // 计算缓冲信息
+      for (let i = 0; i < buffered.length; i++) {
+        try {
+          const start = buffered.start(i) || 0;
+          const end = buffered.end(i) || 0;
+          
+          totalBuffered += end - start;
+          
+          if (currentTime >= start && currentTime <= end) {
+            bufferAhead = end - currentTime;
           }
+        } catch (e) {
+          console.error(`计算缓冲区段 ${i} 失败:`, e);
         }
       }
       
-      // 短暂延迟后重置加载状态
-      setTimeout(() => {
-        this.isLoading = false;
-      }, 3000);
+      return { bufferAhead, totalBuffered };
     } catch (e) {
-      console.error('缓冲管理器：预加载更多内容失败', e);
-      this.isLoading = false;
+      console.error('获取缓冲信息失败:', e);
+      return { bufferAhead: 0, totalBuffered: 0 };
+    }
+  }
+
+  // 清理资源
+  public dispose(): void {
+    if (this.isDisposed) return;
+    
+    console.log('高级缓冲管理器: 开始释放资源');
+    this.isDisposed = true;
+    
+    // 停止所有定时器
+    this.stopBufferCheck();
+    this.stopPreloadThread();
+    
+    // 清理Web Workers
+    if (this.preloadWorker) {
+      this.preloadWorker.terminate();
+      this.preloadWorker = null;
+    }
+    
+    // 移除事件监听器
+    try {
+      if (this.player && typeof this.player.off === 'function') {
+        this.player.off('waiting', this.handleWaiting.bind(this));
+        this.player.off('canplay', this.handleCanPlay.bind(this));
+        this.player.off('progress', this.handleProgress.bind(this));
+      }
+    } catch (e) {
+      console.error('高级缓冲管理器: 移除事件监听器失败', e);
+    }
+    
+    this.player = null;
+    this.videoElement = null;
+    this.bufferHistory = [];
+    console.log('高级缓冲管理器: 已释放资源');
+  }
+
+  // 停止预加载线程
+  private stopPreloadThread(): void {
+    if (this.preloadInterval) {
+      clearInterval(this.preloadInterval);
+      this.preloadInterval = null;
     }
   }
 }
@@ -961,13 +1221,15 @@ const Player: React.FC = () => {
     navigate(-1);
   };
 
-  // 恢复键盘事件处理函数
+  // 恢复键盘事件处理函数 - 增强版
   const handleKeyDown = (e: KeyboardEvent) => {
     if (!playerRef.current) return;
     
     switch (e.key) {
       case ' ':
-        // 空格键暂停/播放
+      case 'k':
+      case 'K':
+        // 空格键或K键暂停/播放
         if (playerRef.current.paused()) {
           playerRef.current.play();
         } else {
@@ -976,23 +1238,73 @@ const Player: React.FC = () => {
         e.preventDefault();
         break;
       case 'ArrowRight':
-        // 右箭头前进10秒
-        playerRef.current.currentTime(playerRef.current.currentTime() + 10);
+        // 右箭头 - 根据修饰键调整快进秒数
+        const rightStep = e.ctrlKey ? 60 : e.shiftKey ? 30 : 10;
+        const newTime = Math.min(
+          playerRef.current.currentTime() + rightStep,
+          playerRef.current.duration() || Infinity
+        );
+        playerRef.current.currentTime(newTime);
+        showSeekFeedback(`快进 ${rightStep} 秒`);
         e.preventDefault();
         break;
       case 'ArrowLeft':
-        // 左箭头后退10秒
-        playerRef.current.currentTime(playerRef.current.currentTime() - 10);
+        // 左箭头 - 根据修饰键调整后退秒数
+        const leftStep = e.ctrlKey ? 60 : e.shiftKey ? 30 : 10;
+        const prevTime = Math.max(
+          playerRef.current.currentTime() - leftStep,
+          0
+        );
+        playerRef.current.currentTime(prevTime);
+        showSeekFeedback(`后退 ${leftStep} 秒`);
         e.preventDefault();
         break;
       case 'ArrowUp':
         // 上箭头增加音量
-        playerRef.current.volume(Math.min(playerRef.current.volume() + 0.1, 1));
+        const newVolume = Math.min(playerRef.current.volume() + 0.1, 1);
+        playerRef.current.volume(newVolume);
+        showVolumeFeedback(`音量 ${Math.round(newVolume * 100)}%`);
         e.preventDefault();
         break;
       case 'ArrowDown':
         // 下箭头减小音量
-        playerRef.current.volume(Math.max(playerRef.current.volume() - 0.1, 0));
+        const lowerVolume = Math.max(playerRef.current.volume() - 0.1, 0);
+        playerRef.current.volume(lowerVolume);
+        showVolumeFeedback(`音量 ${Math.round(lowerVolume * 100)}%`);
+        e.preventDefault();
+        break;
+      case 'l':
+      case 'L':
+        // L键前进10秒
+        const lTime = Math.min(
+          playerRef.current.currentTime() + 10,
+          playerRef.current.duration() || Infinity
+        );
+        playerRef.current.currentTime(lTime);
+        showSeekFeedback('快进 10 秒');
+        e.preventDefault();
+        break;
+      case 'j':
+      case 'J':
+        // J键后退10秒
+        const jTime = Math.max(playerRef.current.currentTime() - 10, 0);
+        playerRef.current.currentTime(jTime);
+        showSeekFeedback('后退 10 秒');
+        e.preventDefault();
+        break;
+      case 'Home':
+        // Home键回到开头
+        playerRef.current.currentTime(0);
+        showSeekFeedback('回到开头');
+        e.preventDefault();
+        break;
+      case 'End':
+        // End键跳到结尾
+        const duration = playerRef.current.duration();
+        if (duration) {
+          playerRef.current.currentTime(duration);
+          showSeekFeedback('跳到结尾');
+        }
         e.preventDefault();
         break;
       case 'n':
@@ -1012,6 +1324,33 @@ const Player: React.FC = () => {
           playerRef.current.exitFullscreen();
         } else {
           playerRef.current.requestFullscreen();
+        }
+        e.preventDefault();
+        break;
+      case 'm':
+      case 'M':
+        // M键静音/取消静音
+        playerRef.current.muted(!playerRef.current.muted());
+        showVolumeFeedback(playerRef.current.muted() ? '已静音' : '已取消静音');
+        e.preventDefault();
+        break;
+      case '0':
+      case '1':
+      case '2':
+      case '3':
+      case '4':
+      case '5':
+      case '6':
+      case '7':
+      case '8':
+      case '9':
+        // 数字键跳转到视频进度的百分比
+        const percent = parseInt(e.key) * 10;
+        const duration = playerRef.current.duration();
+        if (duration) {
+          const targetTime = (duration * percent) / 100;
+          playerRef.current.currentTime(targetTime);
+          showSeekFeedback(`跳转到 ${percent}%`);
         }
         e.preventDefault();
         break;
@@ -3016,6 +3355,56 @@ const Player: React.FC = () => {
     }
   }, [id]);
   
+  // 显示键盘操作反馈
+  const showSeekFeedback = (message: string) => {
+    const feedback = document.createElement('div');
+    feedback.className = 'keyboard-feedback';
+    feedback.textContent = message;
+    feedback.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 10px 20px;
+      border-radius: 5px;
+      font-size: 16px;
+      z-index: 1000;
+      pointer-events: none;
+      animation: fadeInOut 0.5s ease-in-out;
+    `;
+    
+    document.body.appendChild(feedback);
+    setTimeout(() => {
+      feedback.remove();
+    }, 1500);
+  };
+
+  const showVolumeFeedback = (message: string) => {
+    const feedback = document.createElement('div');
+    feedback.className = 'volume-feedback';
+    feedback.textContent = message;
+    feedback.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 8px 16px;
+      border-radius: 4px;
+      font-size: 14px;
+      z-index: 1000;
+      pointer-events: none;
+      animation: slideInOut 0.3s ease-in-out;
+    `;
+    
+    document.body.appendChild(feedback);
+    setTimeout(() => {
+      feedback.remove();
+    }, 2000);
+  };
+
   // 主要渲染函数
   return (
     <div className="player-container">
