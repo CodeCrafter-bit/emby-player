@@ -228,16 +228,16 @@ const Home = () => {
                                     group.type === 'Variety' ? '/variety' :
                                         group.type === 'Documentary' ? '/documentary' : '/recent'), icon: _jsx(RightOutlined, {}), children: "\u67E5\u770B\u5168\u90E8" })] }), _jsx(Row, { gutter: [16, 24], className: "media-items", children: group.items.map((item) => (_jsx(Col, { xs: 12, sm: 8, md: 6, lg: 4, xl: 4, children: renderMediaCard(item) }, item.Id))) })] }));
     };
-    // 如果没有配置服务器，显示配置提示
+    // 如果没有配置服务器，显示配置提示但不强制跳转
     if (!hasServers) {
-        return (_jsx("div", { className: "home-container", children: _jsx(Alert, { message: "\u6B22\u8FCE\u4F7F\u7528Emby\u5BA2\u6237\u7AEF", description: _jsxs("div", { children: [_jsx("p", { children: "\u60A8\u5C1A\u672A\u914D\u7F6E\u4EFB\u4F55Emby\u670D\u52A1\u5668\u3002\u8BF7\u5148\u6DFB\u52A0\u670D\u52A1\u5668\u914D\u7F6E\u4EE5\u7EE7\u7EED\u4F7F\u7528\u3002" }), _jsx(Button, { type: "primary", icon: _jsx(SettingOutlined, {}), onClick: () => navigate('/settings'), children: "\u524D\u5F80\u8BBE\u7F6E" })] }), type: "info", showIcon: true, className: "server-alert" }) }));
+        return (_jsx("div", { className: "home-container", children: _jsx(Alert, { message: "\u6B22\u8FCE\u4F7F\u7528Emby\u5BA2\u6237\u7AEF", description: _jsxs("div", { children: [_jsx("p", { children: "\u60A8\u5C1A\u672A\u914D\u7F6E\u4EFB\u4F55Emby\u670D\u52A1\u5668\u3002\u8BF7\u5148\u6DFB\u52A0\u670D\u52A1\u5668\u914D\u7F6E\u4EE5\u5F00\u59CB\u4F7F\u7528\u3002" }), _jsx(Button, { type: "primary", icon: _jsx(SettingOutlined, {}), onClick: () => navigate('/settings'), children: "\u524D\u5F80\u8BBE\u7F6E" })] }), type: "info", showIcon: true, className: "server-alert" }) }));
     }
-    // 如果有服务器但未登录，显示登录提示
+    // 如果有服务器但未登录，显示登录提示但不强制跳转
     if (!isLoggedIn) {
         const activeServer = servers.find(s => s.id === activeServerId);
-        return (_jsx("div", { className: "home-container", children: _jsx(Alert, { message: "\u9700\u8981\u767B\u5F55", description: _jsxs("div", { children: [_jsx("p", { children: activeServer
-                                ? `请登录到服务器: ${activeServer.name}`
-                                : '请选择一个服务器并登录' }), _jsx(Button, { type: "primary", icon: _jsx(SettingOutlined, {}), onClick: () => navigate('/settings'), children: "\u524D\u5F80\u8BBE\u7F6E" })] }), type: "warning", showIcon: true, className: "server-alert" }) }));
+        return (_jsx("div", { className: "home-container", children: _jsx(Alert, { message: "\u672A\u767B\u5F55\u72B6\u6001", description: _jsxs("div", { children: [_jsx("p", { children: activeServer
+                                ? `当前服务器: ${activeServer.name} - 请登录后查看内容`
+                                : '请选择服务器并登录后查看内容' }), _jsx("p", { children: "\u60A8\u53EF\u4EE5\u4F7F\u7528\u4FA7\u8FB9\u680F\u5BFC\u822A\u5230\u5176\u4ED6\u9875\u9762\uFF0C\u6216\u524D\u5F80\u8BBE\u7F6E\u91CD\u65B0\u914D\u7F6E\u670D\u52A1\u5668" }), _jsxs("div", { style: { marginTop: 16 }, children: [_jsx(Button, { type: "primary", icon: _jsx(SettingOutlined, {}), onClick: () => navigate('/settings'), style: { marginRight: 8 }, children: "\u524D\u5F80\u767B\u5F55" }), _jsx(Button, { onClick: () => navigate('/settings'), children: "\u670D\u52A1\u5668\u8BBE\u7F6E" })] })] }), type: "info", showIcon: true, className: "server-alert" }) }));
     }
     return (_jsx("div", { className: "home-container", children: mediaGroups.map((group, index) => (_jsx(React.Fragment, { children: renderMediaGroup(group) }, index))) }));
 };

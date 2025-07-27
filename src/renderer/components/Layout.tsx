@@ -186,7 +186,7 @@ const Layout: React.FC = () => {
     },
   ];
 
-  // 创建基本菜单项
+  // 创建基本菜单项 - 始终显示所有菜单项，包括设置
   const mainMenuItems: MenuItem[] = [
     {
       key: '/',

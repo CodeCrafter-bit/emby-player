@@ -369,7 +369,7 @@ class AdvancedBufferManager {
                         console.error('缓冲管理器: 获取视频就绪状态失败', e);
                     }
                     if (readyState >= 3) {
-                        this.preloadMore();
+                        this.preloadWorker?.postMessage({ type: 'preload' });
                     }
                 }
             }
@@ -1216,9 +1216,9 @@ const Player = () => {
             case '9':
                 // 数字键跳转到视频进度的百分比
                 const percent = parseInt(e.key) * 10;
-                const duration = playerRef.current.duration();
-                if (duration) {
-                    const targetTime = (duration * percent) / 100;
+                const videoDuration = playerRef.current.duration();
+                if (videoDuration) {
+                    const targetTime = (videoDuration * percent) / 100;
                     playerRef.current.currentTime(targetTime);
                     showSeekFeedback(`跳转到 ${percent}%`);
                 }
@@ -2368,7 +2368,7 @@ const Player = () => {
             };
             // 创建缓冲管理器实例
             if (videoElement) {
-                bufferManagerRef.current = new BufferManager(player, videoElement, handleBufferingChange, handleBufferUpdate);
+                bufferManagerRef.current = new AdvancedBufferManager(player, videoElement, handleBufferingChange, handleBufferUpdate);
             }
             player.ready(function () {
                 // ... 现有代码 ...
@@ -2428,7 +2428,7 @@ const Player = () => {
                         setBufferAhead(bufferAhead);
                         setTotalBuffered(totalBuffered);
                     };
-                    bufferManagerRef.current = new BufferManager(player, videoElement, handleBufferingChange, handleBufferUpdate);
+                    bufferManagerRef.current = new AdvancedBufferManager(player, videoElement, handleBufferingChange, handleBufferUpdate);
                 }
             }, 1000);
         }

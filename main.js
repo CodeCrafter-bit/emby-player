@@ -1,7 +1,8 @@
-const { app, BrowserWindow, session } = require('electron');
+const { app, BrowserWindow, session, protocol } = require('electron');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
+const url = require('url');
 
 function checkPort(port) {
     return new Promise((resolve) => {
@@ -36,6 +37,12 @@ async function findFirstAvailablePort(startPort) {
 async function createWindow() {
     // 禁用证书验证
     app.commandLine.appendSwitch('ignore-certificate-errors');
+    
+    // 添加localStorage权限支持
+    app.commandLine.appendSwitch('enable-features', 'StorageAPI');
+    app.commandLine.appendSwitch('disable-web-security');
+    app.commandLine.appendSwitch('allow-file-access-from-files');
+    app.commandLine.appendSwitch('allow-running-insecure-content');
 
     const mainWindow = new BrowserWindow({
         width: 1200,
@@ -43,8 +50,13 @@ async function createWindow() {
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false,
-            webSecurity: false, // 允许跨域请求
-            preload: path.join(__dirname, 'preload.js')
+            webSecurity: false, // 允许跨域请求和file://协议加载
+            allowRunningInsecureContent: true,
+            preload: path.join(__dirname, 'preload.js'),
+            // 添加localStorage支持
+            partition: 'persist:emby-player',
+            // 确保localStorage可用
+            additionalArguments: ['--enable-features=StorageAPI']
         }
     });
 
@@ -53,7 +65,7 @@ async function createWindow() {
         callback({
             responseHeaders: {
                 ...details.responseHeaders,
-                'Content-Security-Policy': ["default-src * 'self' 'unsafe-inline' 'unsafe-eval' data: blob:"]
+                'Content-Security-Policy': ["default-src * 'self' 'unsafe-inline' 'unsafe-eval' data: blob: file:"]
             }
         });
     });
@@ -127,42 +139,33 @@ async function createWindow() {
             // 处理不同的文件路径情况
             let indexPath;
             
-            // 检查在打包应用中的可能路径
-            if (app.isPackaged) {
-                // 打包后的应用中，查找可能的路径
-                const possiblePaths = [
-                    path.join(__dirname, 'dist/index.html'),
-                    path.join(__dirname, '../dist/index.html'),
-                    path.join(__dirname, '../../dist/index.html'),
-                    path.join(__dirname, './dist/index.html'),
-                    path.join(__dirname, 'dist/renderer/index.html'),
-                    path.join(__dirname, '../dist/renderer/index.html'),
-                    path.join(process.resourcesPath, 'dist/index.html'),
-                    path.join(process.resourcesPath, 'app/dist/index.html'),
-                    path.join(process.resourcesPath, 'app/dist/renderer/index.html')
-                ];
-                
-                // 查找第一个存在的路径
-                for (const p of possiblePaths) {
-                    console.log('检查路径:', p);
-                    if (fs.existsSync(p)) {
-                        indexPath = p;
-                        console.log('找到索引文件:', indexPath);
-                        break;
-                    }
-                }
-                
-                if (!indexPath) {
-                    console.error('未找到索引文件，尝试使用默认路径');
-                    indexPath = path.join(__dirname, 'dist/index.html');
-                }
-            } else {
-                // 非打包环境(npm start)
-                indexPath = path.join(__dirname, 'dist/index.html');
-            }
+            console.log('=== 生产环境文件加载调试 ===');
+            console.log('__dirname:', __dirname);
+            console.log('process.resourcesPath:', process.resourcesPath);
+            console.log('app.isPackaged:', app.isPackaged);
             
-            console.log('最终加载路径:', indexPath);
-            mainWindow.loadFile(indexPath);
+            // 检查在打包应用中的可能路径
+            let actualPath;
+            if (app.isPackaged) {
+                // 在打包环境中，文件在 app.asar 内
+                actualPath = path.join(__dirname, 'dist', 'renderer', 'index.html');
+                console.log('打包环境路径:', actualPath);
+                console.log('__dirname:', __dirname);
+                console.log('是否为asar:', __dirname.includes('app.asar'));
+                
+                // 在asar环境中，直接加载文件
+                mainWindow.loadFile(actualPath);
+            } else {
+                // 非打包环境(npm start) - 使用本地 dist 目录
+                actualPath = path.join(__dirname, 'dist', 'renderer', 'index.html');
+                console.log('开发环境路径:', actualPath);
+                
+                if (fs.existsSync(actualPath)) {
+                    mainWindow.loadFile(actualPath);
+                } else {
+                    throw new Error(`文件不存在: ${actualPath}`);
+                }
+            }
         } catch (err) {
             console.error('加载生产环境文件失败:', err);
             // 显示错误页面
@@ -277,7 +280,10 @@ async function createWindow() {
     });
 }
 
-app.whenReady().then(createWindow);
+// 创建窗口
+app.whenReady().then(() => {
+    createWindow();
+});
 
 app.on('window-all-closed', function () {
     if (process.platform !== 'darwin') app.quit();

@@ -358,7 +358,7 @@ class AdvancedBufferManager {
           }
           
           if (readyState >= 3) {
-            this.preloadMore();
+            this.preloadWorker?.postMessage({ type: 'preload' });
           }
         }
       } catch (e) {
@@ -995,7 +995,7 @@ const Player: React.FC = () => {
   // 缓冲管理相关状态
   const [bufferAhead, setBufferAhead] = useState(0);
   const [totalBuffered, setTotalBuffered] = useState(0);
-  const bufferManagerRef = useRef<BufferManager | null>(null);
+  const bufferManagerRef = useRef<AdvancedBufferManager | null>(null);
   
   // 添加推荐项目类型定义
   interface RecommendedItem {
@@ -1296,13 +1296,13 @@ const Player: React.FC = () => {
       case '8':
       case '9':
         // 数字键跳转到视频进度的百分比
-        const percent = parseInt(e.key) * 10;
-        const duration = playerRef.current.duration();
-        if (duration) {
-          const targetTime = (duration * percent) / 100;
-          playerRef.current.currentTime(targetTime);
-          showSeekFeedback(`跳转到 ${percent}%`);
-        }
+                const percent = parseInt(e.key) * 10;
+                const videoDuration = playerRef.current.duration();
+                if (videoDuration) {
+                    const targetTime = (videoDuration * percent) / 100;
+                    playerRef.current.currentTime(targetTime);
+                    showSeekFeedback(`跳转到 ${percent}%`);
+                }
         e.preventDefault();
         break;
     }
@@ -2614,7 +2614,7 @@ const Player: React.FC = () => {
       
       // 创建缓冲管理器实例
       if (videoElement) {
-        bufferManagerRef.current = new BufferManager(
+        bufferManagerRef.current = new AdvancedBufferManager(
           player,
           videoElement,
           handleBufferingChange,
@@ -2691,7 +2691,7 @@ const Player: React.FC = () => {
             setTotalBuffered(totalBuffered);
           };
           
-          bufferManagerRef.current = new BufferManager(
+          bufferManagerRef.current = new AdvancedBufferManager(
             player,
             videoElement,
             handleBufferingChange,
@@ -3430,4 +3430,4 @@ const Player: React.FC = () => {
   );
 };
 
-export default Player; 
+export default Player;

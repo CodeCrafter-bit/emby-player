@@ -343,7 +343,7 @@ const Home: React.FC = () => {
     );
   };
 
-  // 如果没有配置服务器，显示配置提示
+  // 如果没有配置服务器，显示配置提示但不强制跳转
   if (!hasServers) {
     return (
       <div className="home-container">
@@ -351,7 +351,7 @@ const Home: React.FC = () => {
           message="欢迎使用Emby客户端"
           description={
             <div>
-              <p>您尚未配置任何Emby服务器。请先添加服务器配置以继续使用。</p>
+              <p>您尚未配置任何Emby服务器。请先添加服务器配置以开始使用。</p>
               <Button 
                 type="primary" 
                 icon={<SettingOutlined />} 
@@ -369,30 +369,39 @@ const Home: React.FC = () => {
     );
   }
   
-  // 如果有服务器但未登录，显示登录提示
+  // 如果有服务器但未登录，显示登录提示但不强制跳转
   if (!isLoggedIn) {
     const activeServer = servers.find(s => s.id === activeServerId);
     return (
       <div className="home-container">
         <Alert
-          message="需要登录"
+          message="未登录状态"
           description={
             <div>
               <p>
                 {activeServer 
-                  ? `请登录到服务器: ${activeServer.name}` 
-                  : '请选择一个服务器并登录'}
+                  ? `当前服务器: ${activeServer.name} - 请登录后查看内容` 
+                  : '请选择服务器并登录后查看内容'}
               </p>
-              <Button 
-                type="primary" 
-                icon={<SettingOutlined />} 
-                onClick={() => navigate('/settings')}
-              >
-                前往设置
-              </Button>
+              <p>您可以使用侧边栏导航到其他页面，或前往设置重新配置服务器</p>
+              <div style={{ marginTop: 16 }}>
+                <Button 
+                  type="primary" 
+                  icon={<SettingOutlined />} 
+                  onClick={() => navigate('/settings')}
+                  style={{ marginRight: 8 }}
+                >
+                  前往登录
+                </Button>
+                <Button 
+                  onClick={() => navigate('/settings')}
+                >
+                  服务器设置
+                </Button>
+              </div>
             </div>
           }
-          type="warning"
+          type="info"
           showIcon
           className="server-alert"
         />
