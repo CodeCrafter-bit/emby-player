@@ -107,51 +107,18 @@ class AdvancedBufferManager {
   // 初始化高级缓冲管理器
   private initialize(): void {
     try {
-      if (!this.player || !this.videoElement) {
-        console.log('高级缓冲管理器: 初始化失败，播放器或视频元素不存在');
-        return;
-      }
+      if (!this.player || !this.videoElement) return;
+      if (typeof this.player.on !== 'function') return;
 
-      // 确保事件绑定方法存在
-      if (typeof this.player.on !== 'function') {
-        console.error('高级缓冲管理器: 播放器对象不支持事件绑定，初始化失败');
-        return;
-      }
-
-      // 绑定事件前先解绑，防止重复
-      try {
-        if (typeof this.player.off === 'function') {
-          this.player.off('waiting', this.handleWaiting.bind(this));
-          this.player.off('canplay', this.handleCanPlay.bind(this));
-          this.player.off('progress', this.handleProgress.bind(this));
-          this.player.off('dispose', this.dispose.bind(this));
-        }
-      } catch (e) {
-        console.error('高级缓冲管理器: 解绑事件失败', e);
-      }
-
-      // 绑定方法到this，避免上下文问题
-      const boundHandleWaiting = this.handleWaiting.bind(this);
-      const boundHandleCanPlay = this.handleCanPlay.bind(this);
-      const boundHandleProgress = this.handleProgress.bind(this);
-      const boundDispose = this.dispose.bind(this);
-
-      // 监听缓冲事件
-      this.player.on('waiting', boundHandleWaiting);
-      this.player.on('canplay', boundHandleCanPlay);
-      this.player.on('progress', boundHandleProgress);
+      // 绑定事件
+      this.player.on('waiting', this.handleWaiting.bind(this));
+      this.player.on('canplay', this.handleCanPlay.bind(this));
+      this.player.on('progress', this.handleProgress.bind(this));
+      this.player.on('dispose', this.dispose.bind(this));
       
-      // 监听播放器销毁事件
-      this.player.on('dispose', () => {
-        console.log('高级缓冲管理器: 检测到播放器销毁，清理资源');
-        boundDispose();
-      });
-      
-      // 启动双线程缓冲系统
       this.startDualThreadBuffering();
-      console.log('高级缓冲管理器: 初始化成功，启动双线程缓冲');
     } catch (e) {
-      console.error('高级缓冲管理器: 初始化失败', e);
+      // 静默处理初始化错误
     }
   }
 
@@ -241,7 +208,6 @@ class AdvancedBufferManager {
       return;
     }
     
-    console.log('缓冲管理器: 开始释放资源');
     this.isDisposed = true;
     
     // 停止所有定时器
@@ -255,19 +221,17 @@ class AdvancedBufferManager {
         this.player.off('progress', this.handleProgress.bind(this));
       }
     } catch (e) {
-      console.error('缓冲管理器: 移除事件监听器失败', e);
+      // 静默处理错误
     }
     
     this.player = null;
     this.videoElement = null;
-    console.log('缓冲管理器: 已释放资源');
   }
 
   // 处理等待缓冲事件
   private handleWaiting(): void {
     if (!this.isPlayerValid()) return;
     
-    console.log('缓冲管理器: 检测到视频等待缓冲');
     this.isBuffering = true;
     this.onBufferingChange(true);
     
@@ -276,18 +240,15 @@ class AdvancedBufferManager {
       // 如果播放器处于播放状态但缓冲不足，暂停播放器以积累更多缓冲
       if (this.player && typeof this.player.paused === 'function' && 
           !this.player.paused() && this.getBufferAhead() < this.minPlayBuffer) {
-        console.log('缓冲管理器: 缓冲不足，暂停播放以积累缓冲');
         this.pauseForBuffering();
       }
     } catch (e) {
-      console.error('缓冲管理器: 处理缓冲等待时出错', e);
+      // 静默处理错误
     }
   }
 
   // 处理可以播放事件
   private handleCanPlay(): void {
-    console.log('缓冲管理器：视频可以播放');
-    
     // 如果之前因缓冲不足而暂停，且现在有足够缓冲，则恢复播放
     if (this.pausedForBuffering && this.getBufferAhead() >= this.minPlayBuffer) {
       this.resumeFromBuffering();
@@ -354,12 +315,10 @@ class AdvancedBufferManager {
       try {
         // 缓冲不足，暂停以积累更多缓冲
         if (bufferAhead < this.minPlayBuffer && !isPaused) {
-          console.log(`缓冲管理器: 缓冲不足 (${bufferAhead.toFixed(2)}秒)，暂停播放以积累缓冲`);
           this.pauseForBuffering();
         } 
         // 已暂停且缓冲充足，恢复播放
         else if (bufferAhead >= this.minPlayBuffer && this.pausedForBuffering) {
-          console.log(`缓冲管理器: 缓冲充足 (${bufferAhead.toFixed(2)}秒)，恢复播放`);
           this.resumeFromBuffering();
         } 
         // 缓冲偏低，降低播放速度
@@ -406,7 +365,7 @@ class AdvancedBufferManager {
         console.error('缓冲管理器: 检查预加载失败', e);
       }
     } catch (e) {
-      console.error('缓冲管理器: 检查缓冲状态失败', e);
+      // 静默处理缓冲检查错误
     }
   }
 
@@ -556,7 +515,6 @@ class AdvancedBufferManager {
       this.isBuffering = true;
       this.onBufferingChange(true);
       
-      console.log('缓冲管理器：已暂停播放以积累缓冲');
       
       // 创建缓冲指示器
       this.createBufferingIndicator();
@@ -627,7 +585,6 @@ class AdvancedBufferManager {
         }
         
         this.player.playbackRate(rate);
-        console.log(`缓冲管理器：调整播放速度到 ${rate}`);
       }
     } catch (e) {
       console.error('缓冲管理器：调整播放速度失败', e);
@@ -693,7 +650,6 @@ class AdvancedBufferManager {
       const neededBuffer = preloadEnd - preloadStart;
       
       if (neededBuffer > this.preloadBuffer) {
-        console.log(`预加载线程: 需要预加载 ${neededBuffer.toFixed(2)} 秒内容`);
         this.triggerBackgroundLoad(preloadStart, preloadEnd);
       }
     } catch (e) {
@@ -734,7 +690,6 @@ class AdvancedBufferManager {
       
       preloadWorker.onmessage = (e) => {
         if (e.data.success) {
-          console.log(`预加载完成: ${e.data.size} bytes`);
         }
         preloadWorker.terminate();
       };
@@ -818,11 +773,9 @@ class AdvancedBufferManager {
       // 动态调整策略
       if (avgBuffer < this.minPlayBuffer && !isPaused) {
         // 缓冲不足，暂停播放
-        console.log(`自适应策略: 缓冲不足 ${avgBuffer.toFixed(2)}s，暂停播放`);
         this.pauseForBuffering();
       } else if (this.pausedForBuffering && avgBuffer >= this.minPlayBuffer * 1.5) {
         // 缓冲充足，恢复播放
-        console.log(`自适应策略: 缓冲充足 ${avgBuffer.toFixed(2)}s，恢复播放`);
         this.resumeFromBuffering();
       } else if (trend < -2 && avgBuffer < 20) {
         // 缓冲消耗过快，降低播放速度
@@ -949,7 +902,6 @@ class AdvancedBufferManager {
   public dispose(): void {
     if (this.isDisposed) return;
     
-    console.log('高级缓冲管理器: 开始释放资源');
     this.isDisposed = true;
     
     // 停止所有定时器
@@ -970,13 +922,12 @@ class AdvancedBufferManager {
         this.player.off('progress', this.handleProgress.bind(this));
       }
     } catch (e) {
-      console.error('高级缓冲管理器: 移除事件监听器失败', e);
+      // 静默处理
     }
     
     this.player = null;
     this.videoElement = null;
     this.bufferHistory = [];
-    console.log('高级缓冲管理器: 已释放资源');
   }
 
   // 停止预加载线程
@@ -1415,38 +1366,20 @@ const Player: React.FC = () => {
         return;
       }
       
-      // 每次请求前同步一次服务器URL
-      syncServerUrl();
-      
-      if (!serverUrl) {
-        // 显示友好的错误信息，让用户自行决定
-        console.log('服务器URL不存在，无法获取媒体信息');
+      if (!serverUrl || !token) {
         setLoading(false);
-        setError('正在连接到服务器，请稍等');
-        return;
-      }
-      
-      if (!token) {
-        // 显示友好的错误信息，让用户自行决定
-        console.log('未找到登录凭证，无法继续播放');
-        setLoading(false);
-        setError('登录凭证已失效，请返回首页重新登录');
         return;
       }
       
       try {
-        console.log('开始获取媒体项信息，ID:', id);
         const apiClient = getApiClient();
         const response = await apiClient.get(`/Users/${userId}/Items/${id}`);
         
         if (response.data) {
           const item = response.data;
           setItemInfo(item);
-          console.log('媒体项信息获取成功:', item.Name, '类型:', item.Type);
           
-          // 检查是否为剧集
           if (item.Type === 'Episode') {
-            console.log('检测到剧集类型，设置isEpisode=true');
             setIsEpisode(true);
             setSeasonId(item.SeasonId);
             setSeriesId(item.SeriesId);
@@ -1462,68 +1395,43 @@ const Player: React.FC = () => {
               RunTimeTicks: item.RunTimeTicks,
               ParentIndexNumber: item.ParentIndexNumber
             });
-            console.log('已设置当前剧集:', item.SeriesName, 'S' + item.ParentIndexNumber + 'E' + item.IndexNumber);
             
-            // 获取该剧集所在季的所有剧集
             await fetchEpisodesForSeason(item.SeasonId);
-          } else {
-            // 不是剧集时，重置状态
-            console.log('非剧集类型，设置isEpisode=false');
-            setIsEpisode(false);
-            setSeasonId(null);
-            setSeriesId(null);
           }
           
-          // 获取播放信息和媒体流
           fetchPlaybackInfo(item.Id);
           
-          // 获取推荐内容
-          setTimeout(() => {
-            if (!recommendedItems.length && !recommendedLoading) {
-              console.log('延迟获取推荐内容');
-              fetchRecommendedItems();
-            }
-          }, 1000);
+          if (!recommendedItems.length && !recommendedLoading) {
+            fetchRecommendedItems();
+          }
         }
       } catch (error) {
-        console.error('获取媒体项信息失败:', error);
-        setError('获取媒体信息失败，请检查网络连接或刷新重试');
         setLoading(false);
       }
     };
     
     if (id) {
-    fetchItemInfo();
+      fetchItemInfo();
     }
   }, [id, serverUrl, token, userId, getApiClient, recommendedItems.length, recommendedLoading]);
   
   // 获取播放信息和媒体流
   const fetchPlaybackInfo = async (itemId: string) => {
-    // 确保使用最新的服务器URL
     const currentServerUrl = localStorage.getItem('emby_serverUrl') || serverUrl;
-    const currentToken = token; // 缓存当前token，避免在请求过程中变化
+    const currentToken = token;
     
     if (!currentServerUrl || !currentToken || !itemId) {
-      setError('缺少必要参数，请确保已登录并选择正确的服务器');
       setLoading(false);
       return;
     }
     
-    // 如果服务器URL已变更，则更新状态
     if (currentServerUrl !== serverUrl) {
-      console.log('检测到服务器URL不匹配，正在更新:', currentServerUrl);
       setServerUrl(currentServerUrl);
     }
     
     try {
-      console.log(`获取播放信息，使用服务器: ${currentServerUrl}, ID: ${itemId}`);
       const apiClient = getApiClient();
-      
-      // 显式构建完整URL，确保使用最新服务器地址
-      const playbackInfoUrl = `${currentServerUrl}/emby/Items/${itemId}/PlaybackInfo`;
-      console.log('请求URL:', playbackInfoUrl);
-      
-      const response = await apiClient.post(playbackInfoUrl, {
+      const response = await apiClient.post(`${currentServerUrl}/emby/Items/${itemId}/PlaybackInfo`, {
         UserId: userId,
         DeviceProfile: {
           MaxStreamingBitrate: 120000000,
@@ -1543,13 +1451,10 @@ const Player: React.FC = () => {
       
       if (response.data && response.data.MediaSources && response.data.MediaSources.length > 0) {
         const mediaSourceData = response.data.MediaSources[0];
-        console.log('获取到完整媒体源信息:', JSON.stringify(mediaSourceData, null, 2).substring(0, 500) + '...');
         setMediaSource(mediaSourceData);
         
-        // 提取不同码率的媒体流
         const streams: MediaStream[] = [];
         
-        // 添加自动选择选项
         streams.push({
           id: 'auto',
           name: '自动',
@@ -1557,7 +1462,6 @@ const Player: React.FC = () => {
           url: getStreamUrl(mediaSourceData.Id, itemId)
         });
         
-        // 添加直连选项
         streams.push({
           id: 'direct',
           name: '直连',
@@ -1565,7 +1469,6 @@ const Player: React.FC = () => {
           url: getStreamUrl(mediaSourceData.Id, itemId)
         });
         
-        // 添加HLS选项
         streams.push({
           id: 'hls',
           name: 'HLS流',
@@ -1573,7 +1476,6 @@ const Player: React.FC = () => {
           url: getStreamUrl(mediaSourceData.Id, itemId)
         });
         
-        // 添加MP4转码选项
         streams.push({
           id: 'mp4',
           name: 'MP4转码',
@@ -1582,36 +1484,22 @@ const Player: React.FC = () => {
         });
         
         setMediaStreams(streams);
-        console.log('设置媒体流:', streams);
         
-        // 提取并处理字幕流
         if (mediaSourceData.MediaStreams) {
-          // 找出所有字幕流
           const subtitleStreams = mediaSourceData.MediaStreams.filter(
             (stream: any) => stream.Type === 'Subtitle'
           );
           
-          console.log(`找到 ${subtitleStreams.length} 个字幕流`);
-          
-          // 如果有字幕流，准备加载字幕
           if (subtitleStreams.length > 0) {
-            // 将字幕流信息保存起来，以便后续使用
             setSubtitleStreams(subtitleStreams);
             fetchSubtitles(itemId, subtitleStreams);
           }
         }
-      } else {
-        console.error('未获取到媒体源信息');
       }
     } catch (error: any) {
-      console.error('获取播放信息失败:', error);
-      
-      // 检查是否为401授权错误
       if (error.response && error.response.status === 401) {
         handle401Error(error);
       } else {
-        // 其他类型错误
-        setError(`获取媒体信息失败: ${error.message || '未知错误'}`);
         setLoading(false);
       }
     }
@@ -1621,20 +1509,14 @@ const Player: React.FC = () => {
   const fetchEpisodesForSeason = async (seasonId: string) => {
     if (!seasonId || !token || !userId) return;
     
-    // 确保使用最新的服务器URL
     const currentServerUrl = localStorage.getItem('emby_serverUrl') || serverUrl;
-    if (!currentServerUrl) {
-      console.error('未找到服务器URL，无法获取剧集');
-      return;
-    }
+    if (!currentServerUrl) return;
     
     try {
       setEpisodesLoading(true);
-      console.log('开始获取季节剧集，服务器:', currentServerUrl, '季节ID:', seasonId);
       
       const apiClient = getApiClient();
       
-      // 直接使用标准的Episodes接口，更可靠
       const response = await apiClient.get(`${currentServerUrl}/emby/Shows/${seasonId}/Episodes`, {
         params: {
           userId: userId,
@@ -1646,12 +1528,6 @@ const Player: React.FC = () => {
       });
       
       if (!response.data || !response.data.Items) {
-        console.error('获取剧集响应异常:', response);
-        message.error('获取剧集失败: 响应格式不正确');
-        setEpisodesLoading(false);
-        
-        // 尝试备用方法获取剧集
-        console.log('尝试备用方法获取剧集...');
         await fetchEpisodesAlternative(seasonId);
         return;
       }
@@ -1669,18 +1545,12 @@ const Player: React.FC = () => {
         ParentIndexNumber: item.ParentIndexNumber
       }));
       
-      // 按集数排序
       episodes.sort((a: Episode, b: Episode) => 
         (a.IndexNumber || 0) - (b.IndexNumber || 0)
       );
       
-      console.log(`获取到 ${episodes.length} 集剧集`);
       setEpisodesList(episodes);
     } catch (error) {
-      console.error('获取季节剧集失败:', error);
-      message.error('获取剧集列表失败，尝试备用方法...');
-      
-      // 尝试备用方法获取剧集
       await fetchEpisodesAlternative(seasonId);
     } finally {
       setEpisodesLoading(false);
@@ -2232,7 +2102,6 @@ const Player: React.FC = () => {
         }
       };
       
-      console.log(`初始化播放器，URL: ${videoUrl}`);
       
       // 初始化播放器
       const player = videojs(videoElement, config);
@@ -2295,7 +2164,6 @@ const Player: React.FC = () => {
         // 尝试解除静音
         player.muted(false);
         player.volume(1.0);
-        console.log('播放器就绪，音量:', player.volume(), '静音状态:', player.muted());
         
         // 改进进度条点击和拖动功能
         function enhanceProgressControl() {
@@ -2402,16 +2270,9 @@ const Player: React.FC = () => {
           console.error('设置音频轨道时出错:', e);
         }
 
-        // 检查并报告视频状态
-        console.log('视频元素就绪:', {
-          音量: player.volume(),
-          静音: player.muted(),
-          自动播放: player.autoplay()
-        });
 
         // 如果有字幕流，添加字幕按钮
         if (subtitleStreams && subtitleStreams.length > 0) {
-          console.log(`播放器准备好，发现${subtitleStreams.length}个字幕流`);
           
           // 自动选择第一个字幕
           if (currentSubtitleIndex === null && subtitleStreams.length > 0) {
@@ -2630,12 +2491,10 @@ const Player: React.FC = () => {
       });
       
       player.on('canplay', () => {
-        console.log('视频可以播放');
         setBuffering(false);
       });
       
       player.on('playing', () => {
-        console.log('视频开始播放');
         setLoading(false);
             setBuffering(false);
         setIsPlaying(true); // 标记视频正在播放
@@ -2815,44 +2674,32 @@ const Player: React.FC = () => {
         }
       }
       
-      // 在这里添加缓冲管理器的初始化代码
-      console.log('播放器就绪，开始设置缓冲管理器');
-      
-      // 确保视频元素准备就绪
+      // 初始化缓冲管理器
       setTimeout(() => {
-        // 创建缓冲管理器实例
         if (videoElement && !bufferManagerRef.current) {
-          try {
-            const handleBufferingChange = (buffering: boolean) => {
-              setBuffering(buffering);
-              // 更新UI上的缓冲状态
-              if (buffering) {
-                setBufferingMessage('视频缓冲中...');
-              } else {
-                setBufferingMessage(null);
-              }
-            };
-            
-            const handleBufferUpdate = (bufferAhead: number, totalBuffered: number) => {
-              setBufferAhead(bufferAhead);
-              setTotalBuffered(totalBuffered);
-            };
-            
-            bufferManagerRef.current = new BufferManager(
-              player,
-              videoElement,
-              handleBufferingChange,
-              handleBufferUpdate
-            );
-            
-            console.log('缓冲管理器创建完成');
-          } catch (e) {
-            console.error('创建缓冲管理器失败:', e);
-          }
+          const handleBufferingChange = (buffering: boolean) => {
+            setBuffering(buffering);
+            if (buffering) {
+              setBufferingMessage('视频缓冲中...');
+            } else {
+              setBufferingMessage(null);
+            }
+          };
+          
+          const handleBufferUpdate = (bufferAhead: number, totalBuffered: number) => {
+            setBufferAhead(bufferAhead);
+            setTotalBuffered(totalBuffered);
+          };
+          
+          bufferManagerRef.current = new BufferManager(
+            player,
+            videoElement,
+            handleBufferingChange,
+            handleBufferUpdate
+          );
         }
-      }, 1000); // 延迟创建缓冲管理器，确保播放器和视频元素都已准备就绪
+      }, 1000);
     } catch (e) {
-      console.error('初始化播放器失败:', e);
       setError('初始化播放器失败，请刷新页面重试');
       setLoading(false);
     }
@@ -3088,7 +2935,6 @@ const Player: React.FC = () => {
   // 添加一个useEffect，在首次加载时尝试使用初始化播放器
   useEffect(() => {
     if (mediaSource && !playerInitializedRef.current) {
-      console.log('首次加载尝试初始化播放器');
       initializePlayer(0);
     }
   }, [mediaSource]);
@@ -3125,7 +2971,6 @@ const Player: React.FC = () => {
   useEffect(() => {
     // 当服务器URL变化时，重新初始化播放器
     if (serverUrl && id && mediaSource) {
-      console.log('服务器URL已变更，重新初始化播放器');
       reinitializePlayer();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
