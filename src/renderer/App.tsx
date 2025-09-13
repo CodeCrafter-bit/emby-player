@@ -21,26 +21,17 @@ const App: React.FC = () => {
   const { servers, activeServerId } = useServerStore();
   const navigate = useNavigate();
 
-  // 监控登录状态和服务器配置
+  // 监控登录状态和服务器配置 - 仅记录日志，不进行强制跳转
   useEffect(() => {
     console.log('App组件 - 登录状态:', isLoggedIn, '服务器数量:', servers.length);
+    console.log('当前路径:', window.location.pathname);
+    console.log('完整URL:', window.location.href);
     
-    // 如果没有服务器配置，导航到设置页面
+    // 仅在没有服务器配置时显示提示，但不强制跳转
     if (servers.length === 0) {
-      console.log('没有配置服务器，跳转到设置页面');
-      const currentPath = window.location.pathname;
-      if (currentPath !== '/settings') {
-        navigate('/settings', { replace: true });
-      }
-      return;
+      console.log('没有配置服务器，请前往设置页面添加服务器');
     }
-    
-    // 如果有服务器但未登录，且当前路径不是设置页面，导航到主页
-    if (!isLoggedIn && window.location.pathname !== '/settings') {
-      console.log('未登录，跳转到主页');
-      navigate('/', { replace: true });
-    }
-  }, [isLoggedIn, servers, navigate]);
+  }, [isLoggedIn, servers]);
 
   // 尝试使用存储的凭证自动登录
   useEffect(() => {

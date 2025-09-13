@@ -16,6 +16,9 @@ const Settings: React.FC = () => {
   const [editingServerId, setEditingServerId] = useState<string | null>(null);
   const [form] = Form.useForm();
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
+  
+  console.log('Settings组件 - 服务器数量:', servers.length);
+  console.log('Settings组件 - 活跃服务器ID:', activeServerId);
 
   // 打开添加服务器模态框
   const showAddServerModal = () => {
@@ -122,6 +125,30 @@ const Settings: React.FC = () => {
         logout();
         
         message.success('所有设置已重置');
+      }
+    });
+  };
+  
+  // 快速重置服务器配置
+  const handleQuickReset = () => {
+    Modal.confirm({
+      title: '快速重置服务器配置',
+      content: '此操作将清除所有服务器配置，但保留其他设置。您可以重新添加服务器。',
+      onOk: () => {
+        // 删除所有服务器
+        servers.forEach(server => {
+          deleteServer(server.id);
+        });
+        
+        // 登出
+        logout();
+        
+        message.success('服务器配置已重置，请重新添加服务器');
+        
+        // 自动打开添加服务器模态框
+        setTimeout(() => {
+          showAddServerModal();
+        }, 500);
       }
     });
   };
@@ -250,6 +277,25 @@ const Settings: React.FC = () => {
         </Form>
       </Card>
       
+      <Card title="故障排除" className="settings-card">
+        <p>如果登录失败或遇到连接问题，可以尝试以下操作：</p>
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Button 
+            type="primary" 
+            onClick={showAddServerModal}
+            icon={<PlusOutlined />}
+          >
+            添加新服务器
+          </Button>
+          <Button 
+            danger
+            onClick={handleQuickReset}
+          >
+            快速重置服务器配置
+          </Button>
+        </Space>
+      </Card>
+      
       <Card title="关于" className="settings-card">
         <p>Emby 桌面播放器 v1.0.0</p>
         <p>基于 Electron 和 React 构建</p>
@@ -344,4 +390,4 @@ const Settings: React.FC = () => {
   );
 };
 
-export default Settings; 
+export default Settings;

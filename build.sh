@@ -22,13 +22,10 @@ clean_build() {
   fi
 }
 
-# 构建基础函数
+# 构建基础函数 - 使用正确的构建命令
 build_base() {
-  echo -e "${BLUE}开始TypeScript编译...${NC}"
-  npx cross-env NODE_ENV=production npx tsc --noEmit false || true
-  
   echo -e "${BLUE}开始Vite构建...${NC}"
-  npx cross-env NODE_ENV=production npx vite build
+  npx vite build
   
   if [ $? -ne 0 ]; then
     echo -e "${RED}构建失败${NC}"
@@ -47,6 +44,19 @@ build_mac() {
     echo -e "${GREEN}macOS ARM版本构建完成${NC}"
   else
     echo -e "${RED}macOS ARM版本构建失败${NC}"
+    exit 1
+  fi
+}
+
+# 使用指定的命令构建（npx vite build && npx electron-builder --mac）
+build_direct() {
+  echo -e "${BLUE}开始直接构建...${NC}"
+  npx vite build && npx electron-builder --mac
+  
+  if [ $? -eq 0 ]; then
+    echo -e "${GREEN}直接构建完成${NC}"
+  else
+    echo -e "${RED}直接构建失败${NC}"
     exit 1
   fi
 }
@@ -87,8 +97,8 @@ show_results() {
 main() {
   # 检查是否有参数
   if [ $# -eq 0 ]; then
-    echo -e "${YELLOW}未指定构建目标，默认构建macOS ARM版本${NC}"
-    TARGET="mac"
+    echo -e "${YELLOW}未指定构建目标，默认使用直接构建方式${NC}"
+    TARGET="direct"
   else
     TARGET=$1
   fi
@@ -104,6 +114,9 @@ main() {
     mac)
       build_mac
       ;;
+    direct)
+      build_direct
+      ;;
     mac-universal)
       build_mac_universal
       ;;
@@ -117,7 +130,7 @@ main() {
       ;;
     *)
       echo -e "${RED}未知的构建目标: $TARGET${NC}"
-      echo -e "${YELLOW}可用目标: mac, mac-universal, win, all${NC}"
+      echo -e "${YELLOW}可用目标: mac, direct, mac-universal, win, all${NC}"
       exit 1
       ;;
   esac
